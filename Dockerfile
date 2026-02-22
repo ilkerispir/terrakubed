@@ -29,4 +29,7 @@ COPY --from=builder /app/terrakubed .
 EXPOSE 8075
 EXPOSE 8090
 
+# Default to executor service type (can be overridden via env)
+ENV SERVICE_TYPE=executor
+
 CMD ["./terrakubed"]
