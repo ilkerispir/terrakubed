@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"log"
 	"os"
 
@@ -15,13 +16,10 @@ import (
 func Start(cfg *config.Config) {
 	log.Println("Terrakube Executor Go - Starting...")
 
-	statusService := status.NewStatusService(cfg)
-	// We only need local storage here because Executor state/output upload uses Terraform remote backend mostly,
-	// except if it is using local backend, in which case it uses local Nop.
-	storageService, err := storage.NewStorageService("LOCAL")
-	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
-	}
+	// Initialize storage service based on configured type
+	storageService := initStorage(cfg)
+
+	statusService := status.NewStatusService(cfg, storageService)
 	processor := core.NewJobProcessor(cfg, statusService, storageService)
 
 	if cfg.Mode == "BATCH" {
@@ -37,4 +35,53 @@ func Start(cfg *config.Config) {
 		}
 		online.StartServer(port, processor)
 	}
+}
+
+func initStorage(cfg *config.Config) storage.StorageService {
+	var storageService storage.StorageService
+	var err error
+
+	storageType := cfg.StorageType
+	if storageType == "" {
+		storageType = "LOCAL"
+	}
+
+	switch storageType {
+	case "AWS", "AwsStorageImpl":
+		storageService, err = storage.NewAWSStorageService(
+			context.TODO(),
+			cfg.AwsRegion,
+			cfg.AwsBucketName,
+			cfg.AzBuilderRegistry,
+			cfg.AwsEndpoint,
+			cfg.AwsAccessKey,
+			cfg.AwsSecretKey,
+			cfg.AwsEnableRoleAuth,
+		)
+	case "AZURE", "AzureStorageImpl":
+		storageService, err = storage.NewAzureStorageService(
+			cfg.AzureStorageAccountName,
+			cfg.AzureStorageAccountKey,
+			cfg.AzureStorageContainerName,
+			cfg.AzBuilderRegistry,
+		)
+	case "GCP", "GcpStorageImpl":
+		storageService, err = storage.NewGCPStorageService(
+			context.TODO(),
+			cfg.GcpStorageProjectId,
+			cfg.GcpStorageBucketName,
+			cfg.GcpStorageCredentials,
+			cfg.AzBuilderRegistry,
+		)
+	default:
+		log.Printf("Storage type '%s' not recognized, using NopStorageService", storageType)
+		storageService = &storage.NopStorageService{}
+	}
+
+	if err != nil {
+		log.Printf("Warning: failed to initialize %s storage, falling back to NopStorageService: %v", storageType, err)
+		storageService = &storage.NopStorageService{}
+	}
+
+	return storageService
 }
