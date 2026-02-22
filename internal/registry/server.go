@@ -81,8 +81,9 @@ func jwtAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		_, err := auth.ValidateToken(tokenString, cfg.InternalSecret, cfg.PatSecret)
+		_, err := auth.ValidateTokenWithIssuer(tokenString, cfg.InternalSecret, cfg.PatSecret, cfg.IssuerUri)
 		if err != nil {
+			log.Printf("Token validation failed: %v", err)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
 			return
 		}

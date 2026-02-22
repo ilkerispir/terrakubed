@@ -126,6 +126,18 @@ func readCommitHash(workingDir string) string {
 }
 
 func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
+	// Ensure nil maps/slices from JSON deserialization are initialized
+	// The Java API may send null for these fields when they are not set
+	if job.EnvironmentVariables == nil {
+		job.EnvironmentVariables = make(map[string]string)
+	}
+	if job.Variables == nil {
+		job.Variables = make(map[string]string)
+	}
+	if job.CommandList == nil {
+		job.CommandList = []model.Command{}
+	}
+
 	log.Printf("Processing Job: %s", job.JobId)
 
 	// 1. Update Status to Running

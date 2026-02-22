@@ -2,8 +2,10 @@ package online
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ilkerispir/terrakubed/internal/executor/core"
@@ -23,9 +25,17 @@ func StartServer(port string, processor *core.JobProcessor) {
 			return
 		}
 
-		// Process job asynchronously
-		// In a real implementation this should be offloaded to a worker pool
+		// Process job asynchronously with panic recovery
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC recovered in job processing for job %s: %v\n%s",
+						job.JobId, r, debug.Stack())
+					// Try to update job status to failed
+					errMsg := fmt.Sprintf("Internal executor error: %v", r)
+					processor.Status.SetCompleted(&job, false, errMsg)
+				}
+			}()
 			processor.ProcessJob(&job)
 		}()
 
