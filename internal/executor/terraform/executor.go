@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -40,6 +41,19 @@ func (e *Executor) setupTerraform() (*tfexec.Terraform, error) {
 		return nil, fmt.Errorf("error running NewTerraform: %s", err)
 	}
 
+	env := e.buildEnvMap()
+	tf.SetEnv(env)
+
+	if e.Streamer != nil {
+		tf.SetStdout(e.Streamer)
+		tf.SetStderr(e.Streamer)
+	}
+
+	return tf, nil
+}
+
+// buildEnvMap creates environment variables map merging OS env + job env + job variables
+func (e *Executor) buildEnvMap() map[string]string {
 	env := make(map[string]string)
 
 	for _, kv := range os.Environ() {
@@ -58,22 +72,35 @@ func (e *Executor) setupTerraform() (*tfexec.Terraform, error) {
 		env[fmt.Sprintf("TF_VAR_%s", k)] = v
 	}
 
-	tf.SetEnv(env)
+	return env
+}
+
+// runTerraformDirect runs terraform via os/exec to enable color output.
+// terraform-exec hardcodes -no-color, so we bypass it for user-facing commands.
+func (e *Executor) runTerraformDirect(args ...string) error {
+	cmd := exec.Command(e.ExecPath, args...)
+	cmd.Dir = e.WorkingDir
+
+	// Build environment
+	envMap := e.buildEnvMap()
+	envSlice := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		envSlice = append(envSlice, k+"="+v)
+	}
+	cmd.Env = envSlice
 
 	if e.Streamer != nil {
-		tf.SetStdout(e.Streamer)
-		tf.SetStderr(e.Streamer)
+		cmd.Stdout = e.Streamer
+		cmd.Stderr = e.Streamer
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 	}
 
-	return tf, nil
+	return cmd.Run()
 }
 
 func (e *Executor) Execute() (*ExecutionResult, error) {
-	tf, err := e.setupTerraform()
-	if err != nil {
-		return nil, err
-	}
-
 	ctx := context.Background()
 
 	if e.Job.ShowHeader && e.Streamer != nil {
@@ -81,7 +108,8 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 		e.Streamer.Write([]byte(header))
 	}
 
-	err = tf.Init(ctx, tfexec.Upgrade(true))
+	// Init with color support (direct execution)
+	err := e.runTerraformDirect("init", "-input=false", "-upgrade")
 	if err != nil {
 		return nil, fmt.Errorf("error running Init: %s", err)
 	}
@@ -90,11 +118,11 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 
 	switch e.Job.Type {
 	case "terraformPlan":
-		result, err = e.executePlan(ctx, tf, false)
+		result, err = e.executePlan(ctx)
 	case "terraformApply":
-		err = e.executeApply(ctx, tf)
+		err = e.executeApply(ctx)
 	case "terraformDestroy":
-		err = tf.Destroy(ctx, e.buildDestroyOptions()...)
+		err = e.executeDestroy()
 	default:
 		return nil, fmt.Errorf("unknown job type: %s", e.Job.Type)
 	}
@@ -109,58 +137,51 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 	return result, nil
 }
 
-func (e *Executor) executePlan(ctx context.Context, tf *tfexec.Terraform, isDestroy bool) (*ExecutionResult, error) {
+func (e *Executor) executePlan(ctx context.Context) (*ExecutionResult, error) {
 	planFile := filepath.Join(e.WorkingDir, "terraform.tfplan")
 
-	opts := []tfexec.PlanOption{
-		tfexec.Out(planFile),
-	}
+	args := []string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile}
 
 	if e.Job.Refresh {
-		opts = append(opts, tfexec.Refresh(true))
+		args = append(args, "-refresh=true")
 	}
 	if e.Job.RefreshOnly {
-		opts = append(opts, tfexec.RefreshOnly(true))
-	}
-	if isDestroy {
-		opts = append(opts, tfexec.Destroy(true))
+		args = append(args, "-refresh-only")
 	}
 
-	hasChanges, err := tf.Plan(ctx, opts...)
+	err := e.runTerraformDirect(args...)
 	if err != nil {
+		// Exit code 2 = changes present (not an error for plan)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 2 {
+				return &ExecutionResult{Success: true, ExitCode: 2}, nil
+			}
+		}
 		return &ExecutionResult{Success: false, ExitCode: 1}, err
-	}
-
-	if hasChanges {
-		return &ExecutionResult{Success: true, ExitCode: 2}, nil
 	}
 
 	return &ExecutionResult{Success: true, ExitCode: 0}, nil
 }
 
-func (e *Executor) executeApply(ctx context.Context, tf *tfexec.Terraform) error {
+func (e *Executor) executeApply(ctx context.Context) error {
 	planFile := filepath.Join(e.WorkingDir, "terraformLibrary.tfPlan")
 	if _, err := os.Stat(planFile); err == nil {
-		return tf.Apply(ctx, tfexec.DirOrPlan(planFile))
+		return e.runTerraformDirect("apply", "-input=false", "-auto-approve", planFile)
 	}
 
-	return tf.Apply(ctx, e.buildApplyOptions()...)
+	args := []string{"apply", "-input=false", "-auto-approve"}
+	if e.Job.Refresh {
+		args = append(args, "-refresh=true")
+	}
+	return e.runTerraformDirect(args...)
 }
 
-func (e *Executor) buildApplyOptions() []tfexec.ApplyOption {
-	var opts []tfexec.ApplyOption
+func (e *Executor) executeDestroy() error {
+	args := []string{"destroy", "-input=false", "-auto-approve"}
 	if e.Job.Refresh {
-		opts = append(opts, tfexec.Refresh(true))
+		args = append(args, "-refresh=true")
 	}
-	return opts
-}
-
-func (e *Executor) buildDestroyOptions() []tfexec.DestroyOption {
-	var opts []tfexec.DestroyOption
-	if e.Job.Refresh {
-		opts = append(opts, tfexec.Refresh(true))
-	}
-	return opts
+	return e.runTerraformDirect(args...)
 }
 
 func (e *Executor) Output() (string, error) {
