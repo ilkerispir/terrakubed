@@ -2,7 +2,6 @@ package status
 
 import (
 	"fmt"
-
 	"log"
 
 	"github.com/ilkerispir/terrakubed/internal/auth"
@@ -14,6 +13,9 @@ import (
 type StatusService interface {
 	SetRunning(job *model.TerraformJob) error
 	SetCompleted(job *model.TerraformJob, success bool, output string) error
+	SetPending(job *model.TerraformJob, output string) error
+	UpdateCommitId(job *model.TerraformJob, commitId string) error
+	CreateHistory(job *model.TerraformJob, stateURL string) error
 }
 
 type Service struct {
@@ -43,4 +45,19 @@ func (s *Service) SetCompleted(job *model.TerraformJob, success bool, output str
 		return fmt.Errorf("failed to update step status: %w", err)
 	}
 	return s.client.UpdateJobStatus(job.OrganizationId, job.JobId, status, "")
+}
+
+func (s *Service) SetPending(job *model.TerraformJob, output string) error {
+	if err := s.client.UpdateStepStatus(job.OrganizationId, job.JobId, job.StepId, "pending", output); err != nil {
+		return fmt.Errorf("failed to update step status: %w", err)
+	}
+	return s.client.UpdateJobStatus(job.OrganizationId, job.JobId, "pending", "")
+}
+
+func (s *Service) UpdateCommitId(job *model.TerraformJob, commitId string) error {
+	return s.client.UpdateJobCommitId(job.OrganizationId, job.JobId, commitId)
+}
+
+func (s *Service) CreateHistory(job *model.TerraformJob, stateURL string) error {
+	return s.client.CreateHistory(job.OrganizationId, job.WorkspaceId, stateURL)
 }

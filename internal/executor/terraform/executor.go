@@ -5,11 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
 	"github.com/ilkerispir/terrakubed/internal/executor/logs"
 	"github.com/ilkerispir/terrakubed/internal/model"
 )
+
+// ExecutionResult holds the outcome of a terraform execution.
+type ExecutionResult struct {
+	Success  bool
+	ExitCode int // 0=no changes, 2=changes present (plan)
+}
 
 type Executor struct {
 	Job        *model.TerraformJob
@@ -27,20 +34,18 @@ func NewExecutor(job *model.TerraformJob, workingDir string, streamer logs.LogSt
 	}
 }
 
-func (e *Executor) Execute() error {
+func (e *Executor) setupTerraform() (*tfexec.Terraform, error) {
 	tf, err := tfexec.NewTerraform(e.WorkingDir, e.ExecPath)
 	if err != nil {
-		return fmt.Errorf("error running NewTerraform: %s", err)
+		return nil, fmt.Errorf("error running NewTerraform: %s", err)
 	}
 
-	// Set Environment Variables
 	env := make(map[string]string)
 
-	// Parse OS environment
-	for _, e := range os.Environ() {
-		for i := 0; i < len(e); i++ {
-			if e[i] == '=' {
-				env[e[:i]] = e[i+1:]
+	for _, kv := range os.Environ() {
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				env[kv[:i]] = kv[i+1:]
 				break
 			}
 		}
@@ -55,38 +60,107 @@ func (e *Executor) Execute() error {
 
 	tf.SetEnv(env)
 
-	// Set Log Streaming
 	if e.Streamer != nil {
 		tf.SetStdout(e.Streamer)
 		tf.SetStderr(e.Streamer)
 	}
 
+	return tf, nil
+}
+
+func (e *Executor) Execute() (*ExecutionResult, error) {
+	tf, err := e.setupTerraform()
+	if err != nil {
+		return nil, err
+	}
+
 	ctx := context.Background()
 
-	// Init
+	if e.Job.ShowHeader && e.Streamer != nil {
+		header := fmt.Sprintf("\n========================================\nRunning %s\n========================================\n", e.Job.Type)
+		e.Streamer.Write([]byte(header))
+	}
+
 	err = tf.Init(ctx, tfexec.Upgrade(true))
 	if err != nil {
-		return fmt.Errorf("error running Init: %s", err)
+		return nil, fmt.Errorf("error running Init: %s", err)
 	}
+
+	result := &ExecutionResult{Success: true, ExitCode: 0}
 
 	switch e.Job.Type {
 	case "terraformPlan":
-		_, err = tf.Plan(ctx)
+		result, err = e.executePlan(ctx, tf, false)
 	case "terraformApply":
-		// Apply should probably use the plan if available?
-		// For now standard apply
-		err = tf.Apply(ctx)
+		err = e.executeApply(ctx, tf)
 	case "terraformDestroy":
-		err = tf.Destroy(ctx)
+		err = tf.Destroy(ctx, e.buildDestroyOptions()...)
 	default:
-		return fmt.Errorf("unknown job type: %s", e.Job.Type)
+		return nil, fmt.Errorf("unknown job type: %s", e.Job.Type)
 	}
 
 	if err != nil {
-		return fmt.Errorf("error running %s: %s", e.Job.Type, err)
+		if e.Job.IgnoreError {
+			return &ExecutionResult{Success: true, ExitCode: 0}, nil
+		}
+		return &ExecutionResult{Success: false, ExitCode: 1}, fmt.Errorf("error running %s: %s", e.Job.Type, err)
 	}
 
-	return nil
+	return result, nil
+}
+
+func (e *Executor) executePlan(ctx context.Context, tf *tfexec.Terraform, isDestroy bool) (*ExecutionResult, error) {
+	planFile := filepath.Join(e.WorkingDir, "terraform.tfplan")
+
+	opts := []tfexec.PlanOption{
+		tfexec.Out(planFile),
+	}
+
+	if e.Job.Refresh {
+		opts = append(opts, tfexec.Refresh(true))
+	}
+	if e.Job.RefreshOnly {
+		opts = append(opts, tfexec.RefreshOnly(true))
+	}
+	if isDestroy {
+		opts = append(opts, tfexec.Destroy(true))
+	}
+
+	hasChanges, err := tf.Plan(ctx, opts...)
+	if err != nil {
+		return &ExecutionResult{Success: false, ExitCode: 1}, err
+	}
+
+	if hasChanges {
+		return &ExecutionResult{Success: true, ExitCode: 2}, nil
+	}
+
+	return &ExecutionResult{Success: true, ExitCode: 0}, nil
+}
+
+func (e *Executor) executeApply(ctx context.Context, tf *tfexec.Terraform) error {
+	planFile := filepath.Join(e.WorkingDir, "terraformLibrary.tfPlan")
+	if _, err := os.Stat(planFile); err == nil {
+		return tf.Apply(ctx, tfexec.DirOrPlan(planFile))
+	}
+
+	return tf.Apply(ctx, e.buildApplyOptions()...)
+}
+
+func (e *Executor) buildApplyOptions() []tfexec.ApplyOption {
+	var opts []tfexec.ApplyOption
+	if e.Job.Refresh {
+		opts = append(opts, tfexec.Refresh(true))
+	}
+	return opts
+}
+
+func (e *Executor) buildDestroyOptions() []tfexec.DestroyOption {
+	var opts []tfexec.DestroyOption
+	if e.Job.Refresh {
+		opts = append(opts, tfexec.Refresh(true))
+	}
+	return opts
 }
 
 func (e *Executor) Output() (string, error) {
@@ -95,24 +169,10 @@ func (e *Executor) Output() (string, error) {
 		return "", fmt.Errorf("error running NewTerraform: %s", err)
 	}
 
-	// Set Log Streaming (Optional for Output)
-	if e.Streamer != nil {
-		tf.SetStdout(e.Streamer)
-		tf.SetStderr(e.Streamer)
-	}
-
 	output, err := tf.Output(context.Background())
 	if err != nil {
 		return "", fmt.Errorf("error running Output: %s", err)
 	}
-
-	// Convert outputs to JSON string manually or use tfjson.Format
-	// tfexec Output returns map[string]tfjson.StateOutput
-	// We need raw JSON string often?
-	// tfexec.Output internally parses JSON.
-	// To get raw JSON string, we might need a custom command or re-marshal?
-	// Terrakube Java expects raw JSON string? "terraformJob.setTerraformOutput(jsonOutput.toString())"
-	// Let's re-marshal for simplicity
 
 	bytes, err := json.Marshal(output)
 	if err != nil {
@@ -120,4 +180,37 @@ func (e *Executor) Output() (string, error) {
 	}
 
 	return string(bytes), nil
+}
+
+func (e *Executor) ShowState() (string, error) {
+	tf, err := tfexec.NewTerraform(e.WorkingDir, e.ExecPath)
+	if err != nil {
+		return "", fmt.Errorf("error running NewTerraform: %s", err)
+	}
+
+	state, err := tf.ShowStateFile(context.Background(), filepath.Join(e.WorkingDir, "terraform.tfstate"))
+	if err != nil {
+		return "", fmt.Errorf("error running Show: %s", err)
+	}
+
+	bytes, err := json.Marshal(state)
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}
+
+func (e *Executor) StatePull() (string, error) {
+	tf, err := tfexec.NewTerraform(e.WorkingDir, e.ExecPath)
+	if err != nil {
+		return "", fmt.Errorf("error running NewTerraform: %s", err)
+	}
+
+	state, err := tf.StatePull(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("error running StatePull: %s", err)
+	}
+
+	return state, nil
 }

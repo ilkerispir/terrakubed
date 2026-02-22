@@ -30,6 +30,12 @@ type Config struct {
 	GcpStorageBucketName      string
 	GcpStorageCredentials     string
 
+	// Registry Auth
+	AuthValidationType string // LOCAL or DEX
+	IssuerUri          string
+	AppClientId        string
+	TerrakubeUiURL     string
+
 	// Executor Specific
 	Mode                    string
 	EphemeralJobData        *model.TerraformJob
@@ -92,6 +98,12 @@ func LoadConfig() (*Config, error) {
 		GcpStorageProjectId:       getEnv("GcpStorageProjectId", ""),
 		GcpStorageBucketName:      getEnv("GcpStorageBucketName", ""),
 		GcpStorageCredentials:     getEnv("GcpStorageCredentials", ""),
+
+		// Registry Auth
+		AuthValidationType: getEnvWithFallback("AuthenticationValidationTypeRegistry", "AUTH_VALIDATION_TYPE"),
+		IssuerUri:          getEnvWithFallback("DexIssuerUri", "APP_ISSUER_URI"),
+		AppClientId:        getEnv("AppClientId", ""),
+		TerrakubeUiURL:     getEnvWithFallback("TerrakubeUiURL", "TERRAKUBE_UI_URL"),
 
 		// Executor
 		Mode:                    os.Getenv("EXECUTOR_MODE"),
