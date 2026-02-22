@@ -21,7 +21,7 @@ func NewWorkspace(job *model.TerraformJob) *Workspace {
 
 func (w *Workspace) Setup() (string, error) {
 	gitSvc := git.NewService()
-	finalDir, err := gitSvc.CloneWorkspace(w.Job.Source, w.Job.Branch, w.Job.VcsType, w.Job.AccessToken, w.Job.Folder, w.Job.JobId)
+	finalDir, err := gitSvc.CloneWorkspace(w.Job.Source, w.Job.Branch, w.Job.VcsType, w.Job.ConnectionType, w.Job.AccessToken, w.Job.Folder, w.Job.JobId)
 	if err != nil {
 		return "", err
 	}

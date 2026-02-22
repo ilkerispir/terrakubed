@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,55 +18,119 @@ func NewService() *Service {
 	return &Service{}
 }
 
+// setupCredentialURL injects the appropriate credential format based on VCS type.
+func setupCredentialURL(source, vcsType, connectionType, accessToken string) string {
+	if accessToken == "" || vcsType == "PUBLIC" || strings.HasPrefix(vcsType, "SSH") {
+		return source
+	}
+
+	if !strings.HasPrefix(source, "https://") {
+		return source
+	}
+
+	var user string
+	switch vcsType {
+	case "GITHUB":
+		if connectionType == "OAUTH" {
+			return strings.Replace(source, "https://", fmt.Sprintf("https://%s@", accessToken), 1)
+		}
+		user = "x-access-token"
+	case "BITBUCKET":
+		user = "x-token-auth"
+	case "GITLAB":
+		user = "oauth2"
+	case "AZURE_DEVOPS":
+		user = "dummy"
+	default:
+		user = "oauth2"
+	}
+
+	return strings.Replace(source, "https://", fmt.Sprintf("https://%s:%s@", user, accessToken), 1)
+}
+
+// setupSSHEnv prepares SSH environment for git clone when using SSH keys.
+func setupSSHEnv(vcsType, accessToken, tempDir string) ([]string, func(), error) {
+	cleanup := func() {}
+	env := os.Environ()
+
+	if !strings.HasPrefix(vcsType, "SSH") || accessToken == "" {
+		return env, cleanup, nil
+	}
+
+	parts := strings.SplitN(vcsType, "~", 2)
+	keyName := "id_rsa"
+	if len(parts) == 2 && parts[1] != "" {
+		keyName = parts[1]
+	}
+
+	sshDir := filepath.Join(tempDir, ".ssh")
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return nil, cleanup, fmt.Errorf("failed to create SSH dir: %w", err)
+	}
+
+	keyPath := filepath.Join(sshDir, keyName)
+	if err := os.WriteFile(keyPath, []byte(accessToken), 0600); err != nil {
+		return nil, cleanup, fmt.Errorf("failed to write SSH key: %w", err)
+	}
+
+	cleanup = func() { os.RemoveAll(sshDir) }
+
+	sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", keyPath)
+	env = append(env, "GIT_SSH_COMMAND="+sshCmd)
+
+	return env, cleanup, nil
+}
+
 func (s *Service) CloneRepository(source, version, vcsType, accessToken, tagPrefix, folder string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "terrakube-registry")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
-	// Prepare git clone arguments
-	// Logic to handle accessToken injection based on vcsType (public, github, gitlab, bitbucket, etc.)
-	// This is a simplified version.
+	repoURL := setupCredentialURL(source, vcsType, "", accessToken)
 
-	repoURL := source
-	if accessToken != "" && vcsType != "PUBLIC" {
-		// Basic auth injection for HTTPS
-		// Example: https://token@github.com/org/repo.git
-		if strings.HasPrefix(source, "https://") {
-			repoURL = strings.Replace(source, "https://", fmt.Sprintf("https://oauth2:%s@", accessToken), 1)
+	env, sshCleanup, err := setupSSHEnv(vcsType, accessToken, tempDir)
+	if err != nil {
+		return "", err
+	}
+	defer sshCleanup()
+
+	// Try tag with "v" prefix first, then without
+	tag := tagPrefix + "v" + version
+	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", tag, repoURL, tempDir)
+	cloneCmd.Env = env
+
+	if _, err := cloneCmd.CombinedOutput(); err != nil {
+		tag = tagPrefix + version
+		os.RemoveAll(tempDir)
+		tempDir, _ = os.MkdirTemp("", "terrakube-registry")
+		cloneCmd = exec.Command("git", "clone", "--depth", "1", "--branch", tag, repoURL, tempDir)
+		cloneCmd.Env = env
+		if output, err := cloneCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git clone failed for tag %s: %s: %w", tag, string(output), err)
 		}
 	}
 
-	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", tagPrefix+version, repoURL, tempDir)
-	cloneCmd.Env = os.Environ() // Pass env for SSH execution if needed
-
-	if output, err := cloneCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git clone failed: %s: %w", string(output), err)
-	}
-
-	// If folder is specified, we might need traverse inside?
-	// But usually, we zip the whole repo or subfolder.
-	// Logic to return correct path.
-
 	if folder != "" {
-		return fmt.Sprintf("%s/%s", tempDir, folder), nil
+		return filepath.Join(tempDir, folder), nil
 	}
 
 	return tempDir, nil
 }
 
-func (s *Service) CloneWorkspace(source, branch, vcsType, accessToken, folder string, jobId string) (string, error) {
+func (s *Service) CloneWorkspace(source, branch, vcsType, connectionType, accessToken, folder string, jobId string) (string, error) {
 	tempDir, err := os.MkdirTemp("", fmt.Sprintf("terrakube-job-%s", jobId))
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
-	repoURL := source
-	if accessToken != "" && vcsType != "PUBLIC" {
-		if strings.HasPrefix(source, "https://") {
-			repoURL = strings.Replace(source, "https://", fmt.Sprintf("https://oauth2:%s@", accessToken), 1)
-		}
+	repoURL := setupCredentialURL(source, vcsType, connectionType, accessToken)
+
+	env, sshCleanup, err := setupSSHEnv(vcsType, accessToken, tempDir)
+	if err != nil {
+		return "", err
 	}
+	defer sshCleanup()
 
 	cmdArgs := []string{"clone", "--depth", "1"}
 	if branch != "" {
@@ -74,8 +139,7 @@ func (s *Service) CloneWorkspace(source, branch, vcsType, accessToken, folder st
 	cmdArgs = append(cmdArgs, repoURL, tempDir)
 
 	cloneCmd := exec.Command("git", cmdArgs...)
-	cloneCmd.Env = os.Environ()
-	// TODO: Add SSH key support if VcsType is SSH
+	cloneCmd.Env = env
 
 	if output, err := cloneCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone failed: %s: %w", string(output), err)
@@ -83,7 +147,7 @@ func (s *Service) CloneWorkspace(source, branch, vcsType, accessToken, folder st
 
 	finalDir := tempDir
 	if folder != "" {
-		finalDir = fmt.Sprintf("%s/%s", tempDir, folder)
+		finalDir = filepath.Join(tempDir, folder)
 	}
 
 	return finalDir, nil
