@@ -81,6 +81,8 @@ func (r *RedisStreamer) Write(p []byte) (n int, err error) {
 		}).Err()
 		if err != nil {
 			log.Printf("Warning: failed to send log line to Redis: %v", err)
+		} else if lineNum == 1 {
+			log.Printf("First log line sent to Redis stream (jobId=%s)", r.jobId)
 		}
 	}
 

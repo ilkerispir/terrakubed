@@ -157,9 +157,10 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 		addr := redisHost + ":" + redisPort
 		rs, err := logs.NewRedisStreamer(addr, redisPassword, job.JobId, job.StepId)
 		if err != nil {
-			log.Printf("Warning: failed to connect to Redis, falling back to console: %v", err)
+			log.Printf("Warning: failed to connect to Redis at %s, falling back to console: %v", addr, err)
 			baseStreamer = &logs.ConsoleStreamer{}
 		} else {
+			log.Printf("Redis log streaming enabled (addr=%s, jobId=%s, stepId=%s)", addr, job.JobId, job.StepId)
 			baseStreamer = rs
 		}
 	} else {
