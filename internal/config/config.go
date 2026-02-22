@@ -87,6 +87,23 @@ func getStorageType() string {
 	return "LOCAL"
 }
 
+// getExecutorMode determines if executor runs in BATCH (ephemeral) or ONLINE mode.
+// Java API sets ExecutorFlagBatch=true and EPHEMERAL_JOB_DATA on ephemeral K8s Jobs.
+func getExecutorMode() string {
+	if mode := os.Getenv("EXECUTOR_MODE"); mode != "" {
+		return mode
+	}
+	// Java API sets ExecutorFlagBatch=true for ephemeral executors
+	if os.Getenv("ExecutorFlagBatch") == "true" {
+		return "BATCH"
+	}
+	// Auto-detect: if EPHEMERAL_JOB_DATA is present, run in batch mode
+	if os.Getenv("EPHEMERAL_JOB_DATA") != "" {
+		return "BATCH"
+	}
+	return ""
+}
+
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		// Registry
@@ -116,7 +133,7 @@ func LoadConfig() (*Config, error) {
 		TerrakubeUiURL:     getEnvWithFallback("TerrakubeUiURL", "TERRAKUBE_UI_URL"),
 
 		// Executor
-		Mode:                    os.Getenv("EXECUTOR_MODE"),
+		Mode:                    getExecutorMode(),
 		TerrakubeRegistryDomain: getEnvWithFallback("TERRAKUBE_REGISTRY_DOMAIN", "TerrakubeRegistryDomain"),
 		StorageType:             getStorageType(),
 	}
