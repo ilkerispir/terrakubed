@@ -11,15 +11,24 @@ import (
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
-
 	serviceType := os.Getenv("SERVICE_TYPE")
 	if serviceType == "" {
 		// Default to running all services for easy local development
 		serviceType = "all"
+	}
+
+	// Automatically set PORT based on SERVICE_TYPE if it is not provided
+	if os.Getenv("PORT") == "" {
+		if serviceType == "executor" {
+			os.Setenv("PORT", "8090")
+		} else if serviceType == "registry" {
+			os.Setenv("PORT", "8075")
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
 	log.Printf("Starting Terrakubed (Service Type: %s)\n", serviceType)

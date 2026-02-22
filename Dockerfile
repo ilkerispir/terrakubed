@@ -25,10 +25,6 @@ RUN mkdir -p /home/app/.terrakube/terraform-versions && \
 
 COPY --from=builder /app/terrakubed .
 
-# Default Environment Variables
-ENV SERVICE_TYPE=all
-ENV PORT=8075
-
 # Expose both potential ports
 EXPOSE 8075
 EXPOSE 8090
