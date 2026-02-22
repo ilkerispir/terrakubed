@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -101,39 +102,16 @@ func (p *JobProcessor) generateTerraformCredentials(job *model.TerraformJob, wor
 }
 
 func (p *JobProcessor) generateBackendOverride(job *model.TerraformJob, workingDir string) error {
-	log.Printf("generateBackendOverride checking API URL: AzBuilderApiUrl=%s", p.Config.AzBuilderApiUrl)
-	if p.Config.AzBuilderApiUrl == "" {
-		return nil
-	}
-
-	parsedUrl, err := url.Parse(p.Config.AzBuilderApiUrl)
-	if err != nil {
-		return fmt.Errorf("invalid TerrakubeApiUrl: %v", err)
-	}
-	hostname := parsedUrl.Hostname()
-
-	orgName := job.EnvironmentVariables["organizationName"]
-	if orgName == "" {
-		orgName = job.OrganizationId
-	}
-
-	workspaceName := job.EnvironmentVariables["workspaceName"]
-	if workspaceName == "" {
-		workspaceName = job.WorkspaceId
-	}
-
+	statePath := filepath.Join(workingDir, "terraform.tfstate")
 	overrideContent := fmt.Sprintf(`terraform {
-  backend "remote" {
-    hostname     = "%s"
-    organization = "%s"
-    workspaces {
-      name = "%s"
-    }
+  backend "local" {
+    path = "%s"
   }
 }
-`, hostname, orgName, workspaceName)
+`, statePath)
 
 	overridePath := filepath.Join(workingDir, "terrakube_override.tf")
+	log.Printf("generateBackendOverride: using local backend with state at %s", statePath)
 	return os.WriteFile(overridePath, []byte(overrideContent), 0644)
 }
 
@@ -168,7 +146,24 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 
 	// 4. Download Pre-existing State/Plan if needed
 	// TODO: If APPLY, download PLAN
-	// TODO: If PLAN/APPLY/DESTROY, download STATE (if not using remote backend)
+	remotePath := fmt.Sprintf("organization/%s/workspace/%s/state/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
+	stateReader, err := p.Storage.DownloadFile(remotePath)
+	if err != nil {
+		log.Printf("No existing state found (this is normal for new workspaces): %v", err)
+	} else {
+		defer stateReader.Close()
+		localStatePath := filepath.Join(workingDir, "terraform.tfstate")
+		f, err := os.Create(localStatePath)
+		if err != nil {
+			log.Printf("Failed to create local state file: %v", err)
+		} else {
+			if _, err := io.Copy(f, stateReader); err != nil {
+				log.Printf("Failed to write state file: %v", err)
+			}
+			f.Close()
+			log.Printf("Downloaded existing state to %s", localStatePath)
+		}
+	}
 
 	// 5. Execute Command
 	var executionErr error
