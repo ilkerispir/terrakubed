@@ -33,3 +33,6 @@ go.work.sum
 
 # MacOS
 .DS_Store
+
+# Terrakube repo
+terrakube-repo/
