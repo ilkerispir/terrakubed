@@ -36,3 +36,6 @@ go.work.sum
 
 # Terrakube repo
 terrakube-repo/
+
+# Claude Code
+.claude
