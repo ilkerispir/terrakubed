@@ -12,12 +12,12 @@ import (
 	"github.com/ilkerispir/terrakubed/internal/auth"
 	"github.com/ilkerispir/terrakubed/internal/config"
 	"github.com/ilkerispir/terrakubed/internal/executor/logs"
-	"github.com/ilkerispir/terrakubed/internal/model"
 	"github.com/ilkerispir/terrakubed/internal/executor/script"
-	"github.com/ilkerispir/terrakubed/internal/status"
-	"github.com/ilkerispir/terrakubed/internal/storage"
 	"github.com/ilkerispir/terrakubed/internal/executor/terraform"
 	"github.com/ilkerispir/terrakubed/internal/executor/workspace"
+	"github.com/ilkerispir/terrakubed/internal/model"
+	"github.com/ilkerispir/terrakubed/internal/status"
+	"github.com/ilkerispir/terrakubed/internal/storage"
 )
 
 type JobProcessor struct {
@@ -74,8 +74,8 @@ func (p *JobProcessor) generateTerraformCredentials(job *model.TerraformJob, wor
 		log.Printf("generateTerraformCredentials: added credentials for registryHost: %s", registryHost)
 	}
 
-	if p.Config.TerrakubeApiUrl != "" {
-		parsedUrl, err := url.Parse(p.Config.TerrakubeApiUrl)
+	if p.Config.AzBuilderApiUrl != "" {
+		parsedUrl, err := url.Parse(p.Config.AzBuilderApiUrl)
 		if err == nil && parsedUrl.Hostname() != "" {
 			apiHost := parsedUrl.Hostname()
 			if apiHost != registryHost {
@@ -101,12 +101,12 @@ func (p *JobProcessor) generateTerraformCredentials(job *model.TerraformJob, wor
 }
 
 func (p *JobProcessor) generateBackendOverride(job *model.TerraformJob, workingDir string) error {
-	log.Printf("generateBackendOverride checking API URL: TerrakubeApiUrl=%s", p.Config.TerrakubeApiUrl)
-	if p.Config.TerrakubeApiUrl == "" {
+	log.Printf("generateBackendOverride checking API URL: AzBuilderApiUrl=%s", p.Config.AzBuilderApiUrl)
+	if p.Config.AzBuilderApiUrl == "" {
 		return nil
 	}
 
-	parsedUrl, err := url.Parse(p.Config.TerrakubeApiUrl)
+	parsedUrl, err := url.Parse(p.Config.AzBuilderApiUrl)
 	if err != nil {
 		return fmt.Errorf("invalid TerrakubeApiUrl: %v", err)
 	}

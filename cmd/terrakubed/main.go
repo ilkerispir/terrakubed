@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/ilkerispir/terrakubed/internal/config"
+	"github.com/ilkerispir/terrakubed/internal/executor"
 	"github.com/ilkerispir/terrakubed/internal/registry"
 )
 
@@ -62,5 +63,5 @@ func startRegistry(cfg *config.Config) {
 
 func startExecutor(cfg *config.Config) {
 	log.Println("Executor service is starting...")
-	// TODO: Initialize and start Executor (Online HTTP server or Batch mode)
+	executor.Start(cfg)
 }

@@ -26,7 +26,7 @@ func NewStatusService(cfg *config.Config) *Service {
 		log.Printf("Warning: failed to generate Terrakube token for API requests: %v", err)
 	}
 	return &Service{
-		client: client.NewTerrakubeClient(cfg.TerrakubeApiUrl, token),
+		client: client.NewTerrakubeClient(cfg.AzBuilderApiUrl, token),
 	}
 }
 
