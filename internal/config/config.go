@@ -93,12 +93,12 @@ func getExecutorMode() string {
 	if mode := os.Getenv("EXECUTOR_MODE"); mode != "" {
 		return mode
 	}
-	// Java API sets ExecutorFlagBatch=true for ephemeral executors
-	if os.Getenv("ExecutorFlagBatch") == "true" {
+	// Java API sets EphemeralFlagBatch=true for ephemeral executors
+	if os.Getenv("EphemeralFlagBatch") == "true" || os.Getenv("ExecutorFlagBatch") == "true" {
 		return "BATCH"
 	}
-	// Auto-detect: if EPHEMERAL_JOB_DATA is present, run in batch mode
-	if os.Getenv("EPHEMERAL_JOB_DATA") != "" {
+	// Auto-detect: if EphemeralJobData is present, run in batch mode
+	if os.Getenv("EphemeralJobData") != "" || os.Getenv("EPHEMERAL_JOB_DATA") != "" {
 		return "BATCH"
 	}
 	return ""
@@ -147,9 +147,9 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Mode == "BATCH" {
-		jobData := os.Getenv("EPHEMERAL_JOB_DATA")
+		jobData := getEnvChain("EphemeralJobData", "EPHEMERAL_JOB_DATA")
 		if jobData == "" {
-			return nil, fmt.Errorf("EXECUTOR_MODE is BATCH but EPHEMERAL_JOB_DATA is empty")
+			return nil, fmt.Errorf("BATCH mode but EphemeralJobData/EPHEMERAL_JOB_DATA is empty")
 		}
 
 		decodedData, err := base64.StdEncoding.DecodeString(jobData)
