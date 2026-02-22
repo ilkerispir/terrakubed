@@ -58,6 +58,16 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// getEnvChain tries multiple environment variable names in order, returning the first non-empty value.
+func getEnvChain(keys ...string) string {
+	for _, key := range keys {
+		if val := os.Getenv(key); val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
 func getStorageType() string {
 	st := os.Getenv("STORAGE_TYPE")
 	if st != "" {
@@ -84,10 +94,10 @@ func LoadConfig() (*Config, error) {
 		AzBuilderRegistry:         getEnv("AzBuilderRegistry", "http://localhost:8075"),
 		AzBuilderApiUrl:           getEnv("AzBuilderApiUrl", "http://localhost:8081"),
 		RegistryStorageType:       getEnv("RegistryStorageType", "AWS"),
-		AwsBucketName:             getEnvWithFallback("AwsStorageBucketName", "AWS_BUCKET_NAME"),
-		AwsRegion:                 getEnvWithFallback("AwsStorageRegion", "AWS_REGION"),
-		AwsAccessKey:              getEnvWithFallback("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID"),
-		AwsSecretKey:              getEnvWithFallback("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY"),
+		AwsBucketName:             getEnvChain("AwsStorageBucketName", "AWS_BUCKET_NAME", "AwsTerraformStateBucketName", "AwsTerraformOutputBucketName"),
+		AwsRegion:                 getEnvChain("AwsStorageRegion", "AWS_REGION", "AwsTerraformStateRegion", "AwsTerraformOutputRegion"),
+		AwsAccessKey:              getEnvChain("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID", "AwsTerraformStateAccessKey"),
+		AwsSecretKey:              getEnvChain("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY", "AwsTerraformStateSecretKey"),
 		AwsEndpoint:               getEnv("AwsEndpoint", ""),
 		AwsEnableRoleAuth:         getEnv("AwsEnableRoleAuth", "false") == "true",
 		PatSecret:                 getEnv("PatSecret", ""),
