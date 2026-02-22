@@ -179,7 +179,7 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 	stateReader, err := p.Storage.DownloadFile(remotePath)
 	if err != nil {
 		log.Printf("No existing state found (this is normal for new workspaces): %v", err)
-	} else {
+	} else if stateReader != nil {
 		defer stateReader.Close()
 		localStatePath := filepath.Join(workingDir, "terraform.tfstate")
 		f, err := os.Create(localStatePath)
