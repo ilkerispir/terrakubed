@@ -1,0 +1,129 @@
+package config
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/ilkerispir/terrakubed/internal/model"
+)
+
+type Config struct {
+	// Mixed Config
+	Port                      string
+	AzBuilderRegistry         string
+	AzBuilderApiUrl           string
+	RegistryStorageType       string
+	AwsBucketName             string
+	AwsRegion                 string
+	AwsAccessKey              string
+	AwsSecretKey              string
+	AwsEndpoint               string
+	AwsEnableRoleAuth         bool
+	PatSecret                 string
+	InternalSecret            string
+	AzureStorageAccountName   string
+	AzureStorageAccountKey    string
+	AzureStorageContainerName string
+	GcpStorageProjectId       string
+	GcpStorageBucketName      string
+	GcpStorageCredentials     string
+
+	// Executor Specific
+	Mode                    string
+	EphemeralJobData        *model.TerraformJob
+	TerrakubeRegistryDomain string
+	StorageType             string
+}
+
+func getEnvWithFallback(primary, fallback string) string {
+	val := os.Getenv(primary)
+	if val == "" {
+		return os.Getenv(fallback)
+	}
+	return val
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func getStorageType() string {
+	st := os.Getenv("STORAGE_TYPE")
+	if st != "" {
+		return st
+	}
+	tst := os.Getenv("TerraformStateType")
+	switch tst {
+	case "AwsTerraformStateImpl":
+		return "AWS"
+	case "AzureTerraformStateImpl":
+		return "AZURE"
+	case "GcpTerraformStateImpl":
+		return "GCP"
+	case "LocalTerraformStateImpl", "":
+		return "LOCAL"
+	}
+	return "LOCAL"
+}
+
+func LoadConfig() (*Config, error) {
+	cfg := &Config{
+		// Registry
+		Port:                      getEnv("PORT", "8075"),
+		AzBuilderRegistry:         getEnv("AzBuilderRegistry", "http://localhost:8075"),
+		AzBuilderApiUrl:           getEnv("AzBuilderApiUrl", "http://localhost:8081"),
+		RegistryStorageType:       getEnv("RegistryStorageType", "AWS"),
+		AwsBucketName:             getEnvWithFallback("AwsStorageBucketName", "AWS_BUCKET_NAME"),
+		AwsRegion:                 getEnvWithFallback("AwsStorageRegion", "AWS_REGION"),
+		AwsAccessKey:              getEnvWithFallback("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID"),
+		AwsSecretKey:              getEnvWithFallback("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY"),
+		AwsEndpoint:               getEnv("AwsEndpoint", ""),
+		AwsEnableRoleAuth:         getEnv("AwsEnableRoleAuth", "false") == "true",
+		PatSecret:                 getEnv("PatSecret", ""),
+		InternalSecret:            getEnv("InternalSecret", ""),
+		AzureStorageAccountName:   getEnv("AzureStorageAccountName", ""),
+		AzureStorageAccountKey:    getEnv("AzureStorageAccountKey", ""),
+		AzureStorageContainerName: getEnv("AzureStorageContainerName", ""),
+		GcpStorageProjectId:       getEnv("GcpStorageProjectId", ""),
+		GcpStorageBucketName:      getEnv("GcpStorageBucketName", ""),
+		GcpStorageCredentials:     getEnv("GcpStorageCredentials", ""),
+
+		// Executor
+		Mode:                    os.Getenv("EXECUTOR_MODE"),
+		TerrakubeRegistryDomain: getEnvWithFallback("TERRAKUBE_REGISTRY_DOMAIN", "TerrakubeRegistryDomain"),
+		StorageType:             getStorageType(),
+	}
+
+	// Override API / Secret if provided by executor envs
+	if api := getEnvWithFallback("TERRAKUBE_API_URL", "TerrakubeApiUrl"); api != "" {
+		cfg.AzBuilderApiUrl = api
+	}
+	if secret := getEnvWithFallback("TERRAKUBE_INTERNAL_SECRET", "InternalSecret"); secret != "" {
+		cfg.InternalSecret = secret
+	}
+
+	if cfg.Mode == "BATCH" {
+		jobData := os.Getenv("EPHEMERAL_JOB_DATA")
+		if jobData == "" {
+			return nil, fmt.Errorf("EXECUTOR_MODE is BATCH but EPHEMERAL_JOB_DATA is empty")
+		}
+
+		decodedData, err := base64.StdEncoding.DecodeString(jobData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode EPHEMERAL_JOB_DATA: %v", err)
+		}
+
+		var job model.TerraformJob
+		if err := json.Unmarshal(decodedData, &job); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal EPHEMERAL_JOB_DATA: %v", err)
+		}
+		cfg.EphemeralJobData = &job
+	}
+
+	return cfg, nil
+}
