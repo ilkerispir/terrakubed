@@ -147,8 +147,21 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 
 	// 2. Setup Logging
 	var baseStreamer logs.LogStreamer
-	if os.Getenv("USE_REDIS_LOGS") == "true" {
-		baseStreamer = logs.NewRedisStreamer(os.Getenv("REDIS_HOST"), os.Getenv("REDIS_PASSWORD"), job.JobId, job.StepId)
+	redisHost := os.Getenv("TerrakubeRedisHostname")
+	redisPort := os.Getenv("TerrakubeRedisPort")
+	redisPassword := os.Getenv("TerrakubeRedisPassword")
+	if redisHost != "" {
+		if redisPort == "" {
+			redisPort = "6379"
+		}
+		addr := redisHost + ":" + redisPort
+		rs, err := logs.NewRedisStreamer(addr, redisPassword, job.JobId, job.StepId)
+		if err != nil {
+			log.Printf("Warning: failed to connect to Redis, falling back to console: %v", err)
+			baseStreamer = &logs.ConsoleStreamer{}
+		} else {
+			baseStreamer = rs
+		}
 	} else {
 		baseStreamer = &logs.ConsoleStreamer{}
 	}

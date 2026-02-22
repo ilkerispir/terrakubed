@@ -3,57 +3,108 @@ package logs
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
-	"time"
+	"strings"
+	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
 )
 
+// RedisStreamer writes log lines to a Redis Stream so the API can serve them
+// in real-time via the /tfoutput/v1/... endpoint.
+// Matches the Java LogsServiceRedis + LogsConsumer pattern.
 type RedisStreamer struct {
-	client *redis.Client
-	jobId  string
-	stepId string
+	client     *redis.Client
+	jobId      string
+	stepId     string
+	lineNumber atomic.Int32
+	buf        strings.Builder
 }
 
-func NewRedisStreamer(addr, password, jobId, stepId string) *RedisStreamer {
+func NewRedisStreamer(addr, password, jobId, stepId string) (*RedisStreamer, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     addr,
-		Password: password, // no password set
-		DB:       0,        // use default DB
+		Password: password,
+		DB:       0,
 	})
 
-	return &RedisStreamer{
+	// Verify connection
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis at %s: %w", addr, err)
+	}
+
+	rs := &RedisStreamer{
 		client: rdb,
 		jobId:  jobId,
 		stepId: stepId,
 	}
+
+	// Setup consumer groups (matching Java setupConsumerGroups)
+	ctx := context.Background()
+	_ = rdb.XGroupCreateMkStream(ctx, jobId, "CLI", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, jobId, "UI", "0").Err()
+
+	return rs, nil
 }
 
 func (r *RedisStreamer) Write(p []byte) (n int, err error) {
-	// Write to Stdout as well for debugging
+	// Write to stdout for pod logs
 	os.Stdout.Write(p)
 
-	ctx := context.Background()
-	values := map[string]interface{}{
-		"jobId":  r.jobId,
-		"stepId": r.stepId,
-		"output": string(p),
-		"time":   time.Now().UnixMilli(),
-	}
+	text := string(p)
+	r.buf.WriteString(text)
 
-	err = r.client.XAdd(ctx, &redis.XAddArgs{
-		Stream: r.jobId,
-		Values: values,
-	}).Err()
+	// Split by newlines and send each complete line to Redis
+	for {
+		content := r.buf.String()
+		idx := strings.IndexByte(content, '\n')
+		if idx == -1 {
+			break
+		}
+		line := content[:idx]
+		remaining := content[idx+1:]
+		r.buf.Reset()
+		r.buf.WriteString(remaining)
 
-	if err != nil {
-		fmt.Printf("Failed to write to redis: %v\n", err)
-		return len(p), nil // Don't fail the execution if logs fail
+		lineNum := r.lineNumber.Add(1)
+
+		// XADD to Redis Stream (matching Java LogsServiceRedis.sendLogs)
+		err := r.client.XAdd(context.Background(), &redis.XAddArgs{
+			Stream: r.jobId,
+			Values: map[string]interface{}{
+				"jobId":      r.jobId,
+				"stepId":     r.stepId,
+				"lineNumber": fmt.Sprintf("%d", lineNum),
+				"output":     line,
+			},
+		}).Err()
+		if err != nil {
+			log.Printf("Warning: failed to send log line to Redis: %v", err)
+		}
 	}
 
 	return len(p), nil
 }
 
 func (r *RedisStreamer) Close() error {
+	// Flush any remaining content in buffer
+	if r.buf.Len() > 0 {
+		lineNum := r.lineNumber.Add(1)
+		_ = r.client.XAdd(context.Background(), &redis.XAddArgs{
+			Stream: r.jobId,
+			Values: map[string]interface{}{
+				"jobId":      r.jobId,
+				"stepId":     r.stepId,
+				"lineNumber": fmt.Sprintf("%d", lineNum),
+				"output":     r.buf.String(),
+			},
+		}).Err()
+		r.buf.Reset()
+	}
+
+	// Delete the stream after completion (matching Java deleteLogs)
+	r.client.Del(context.Background(), r.jobId)
+
 	return r.client.Close()
 }
