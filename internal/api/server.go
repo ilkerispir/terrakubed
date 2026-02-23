@@ -17,6 +17,7 @@ import (
 type Config struct {
 	DatabaseURL    string
 	Port           int
+	Hostname       string
 	DexIssuerURI   string
 	PatSecret      string
 	InternalSecret string
@@ -54,6 +55,11 @@ func NewServer(config Config) (*Server, error) {
 	outputHandler := handler.NewTerraformOutputHandler(repo)
 	contextHandler := handler.NewContextHandler(repo)
 
+	// State & TFE handlers
+	stateHandler := handler.NewTerraformStateHandler(db.Pool, config.Hostname)
+	tfeHandler := handler.NewRemoteTFEHandler(db.Pool, config.Hostname)
+	wellKnownHandler := handler.NewWellKnownHandler(config.Hostname)
+
 	// Set up routes
 	mux := http.NewServeMux()
 
@@ -64,6 +70,11 @@ func NewServer(config Config) (*Server, error) {
 	mux.HandleFunc("/logs/", logsHandler.AppendLogs)
 	mux.HandleFunc("/tfoutput/v1/", outputHandler.GetOutput)
 	mux.HandleFunc("/context/v1/", contextHandler.GetContext)
+
+	// State & TFE endpoints
+	mux.Handle("/tfstate/v1/", stateHandler)
+	mux.Handle("/remote/tfe/v2/", tfeHandler)
+	mux.Handle("/.well-known/terraform.json", wellKnownHandler)
 
 	// Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
