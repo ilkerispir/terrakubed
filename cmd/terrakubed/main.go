@@ -21,11 +21,17 @@ func main() {
 
 	// Automatically set PORT based on SERVICE_TYPE if it is not provided
 	if os.Getenv("PORT") == "" {
-		if serviceType == "executor" {
+		switch serviceType {
+		case "api":
+			os.Setenv("PORT", "8080")
+		case "executor":
 			os.Setenv("PORT", "8090")
-		} else if serviceType == "registry" {
+		case "registry":
 			os.Setenv("PORT", "8075")
 		}
+	}
+	if os.Getenv("API_PORT") == "" {
+		os.Setenv("API_PORT", "8080")
 	}
 
 	cfg, err := config.LoadConfig()
@@ -80,10 +86,7 @@ func main() {
 func startAPI(cfg *config.Config) {
 	log.Println("API service is starting...")
 
-	port, err := strconv.Atoi(cfg.ApiPort)
-	if err != nil {
-		port = 8080
-	}
+	port, _ := strconv.Atoi(cfg.ApiPort)
 
 	apiConfig := api.Config{
 		DatabaseURL:    cfg.DatabaseURL,

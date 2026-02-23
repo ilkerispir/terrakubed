@@ -25,7 +25,8 @@ RUN mkdir -p /home/app/.terrakube/terraform-versions && \
 
 COPY --from=builder /app/terrakubed .
 
-# Expose both potential ports
+# Expose all service ports
+EXPOSE 8080
 EXPOSE 8075
 EXPOSE 8090
 
