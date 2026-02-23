@@ -216,6 +216,7 @@ func AuthMiddleware(config AuthConfig) func(http.Handler) http.Handler {
 // CORSMiddleware adds CORS headers.
 func CORSMiddleware(uiURL string) func(http.Handler) http.Handler {
 	origins := strings.Split(uiURL, ",")
+	log.Printf("CORS: configured allowed origins: %v (raw UIURL=%q)", origins, uiURL)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +227,10 @@ func CORSMiddleware(uiURL string) func(http.Handler) http.Handler {
 					allowed = true
 					break
 				}
+			}
+
+			if r.Method == http.MethodOptions {
+				log.Printf("CORS: OPTIONS request origin=%q allowed=%v", origin, allowed)
 			}
 
 			if allowed {
