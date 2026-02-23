@@ -40,6 +40,7 @@ func NewAWSStorageService(ctx context.Context, region, bucket, hostname, endpoin
 	cfgOptions = append(cfgOptions, config.WithRegion(region))
 	cfgOptions = append(cfgOptions, config.WithEndpointResolverWithOptions(customResolver))
 
+	log.Printf("AWS credential check: accessKey len=%d, secretKey len=%d", len(accessKey), len(secretKey))
 	if accessKey != "" && secretKey != "" {
 		// Use static credentials when provided
 		log.Printf("Using static AWS credentials (access key provided)")
