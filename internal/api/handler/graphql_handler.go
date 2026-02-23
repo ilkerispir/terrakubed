@@ -190,9 +190,25 @@ func (h *GraphQLHandler) resolveRelationship(ctx context.Context, parentID strin
 		return nil, err
 	}
 
+	// Get child meta for resolving nested relationships
+	childMeta, _ := h.repo.GetMeta(childRel.ChildType)
+
 	nodes := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {
-		nodes = append(nodes, filterFields(row, rel.fields))
+		node := filterFields(row, rel.fields)
+
+		// Resolve nested sub-relationships (e.g., workspaceTag inside workspace)
+		if childMeta != nil {
+			childID := fmt.Sprintf("%v", row[childMeta.PKColumn])
+			for _, subRel := range rel.rels {
+				subData, err := h.resolveRelationship(ctx, childID, childMeta, subRel)
+				if err == nil {
+					node[subRel.name] = subData
+				}
+			}
+		}
+
+		nodes = append(nodes, node)
 	}
 
 	return map[string]interface{}{
@@ -266,12 +282,13 @@ func (h *GraphQLHandler) executeMutation(ctx context.Context, query string, vari
 }
 
 // ──────────────────────────────────────────────────
-// Query parsing helpers
+// Query parsing helpers — proper brace-matching
 // ──────────────────────────────────────────────────
 
 type relInfo struct {
 	name   string
 	fields []string
+	rels   []relInfo // nested relationships
 }
 
 var (
@@ -281,8 +298,6 @@ var (
 	idsRe = regexp.MustCompile(`\(\s*ids?\s*:\s*\[([^\]]*)\]`)
 	// Matches single id filter: (id: "uuid")
 	singleIDRe = regexp.MustCompile(`\(\s*ids?\s*:\s*"([^"]+)"`)
-	// Matches field names inside node { ... }
-	nodeFieldsRe = regexp.MustCompile(`node\s*\{([^}]+)\}`)
 )
 
 func parseGraphQLQuery(query string) (rootType string, ids []string, fields []string, relationships []relInfo) {
@@ -293,8 +308,7 @@ func parseGraphQLQuery(query string) (rootType string, ids []string, fields []st
 	}
 	rootType = matches[1]
 
-	// Remove query wrapper to get inner content
-	// Skip "query" keyword and opening brace
+	// Find content after root type name
 	inner := query
 	if idx := strings.Index(inner, rootType); idx >= 0 {
 		inner = inner[idx+len(rootType):]
@@ -312,35 +326,148 @@ func parseGraphQLQuery(query string) (rootType string, ids []string, fields []st
 		ids = append(ids, singleMatch[1])
 	}
 
-	// Extract node fields
-	if nodeMatch := nodeFieldsRe.FindStringSubmatch(inner); len(nodeMatch) >= 2 {
-		nodeContent := nodeMatch[1]
-		for _, f := range strings.Fields(nodeContent) {
-			f = strings.TrimSpace(f)
-			if f != "" && f != "{" && f != "}" {
-				fields = append(fields, f)
-			}
-		}
+	// Find the root node's body using brace matching
+	// We need to find: edges { node { BODY } }
+	nodeBody := findNodeBody(inner)
+	if nodeBody == "" {
+		return
 	}
 
-	// Extract relationships (nested resources with their own edges/node)
-	// Pattern: relationship { edges { node { field1 field2 } } }
-	relRe := regexp.MustCompile(`(\w+)\s*\{[^{}]*edges\s*\{[^{}]*node\s*\{([^}]+)\}`)
-	relMatches := relRe.FindAllStringSubmatch(inner, -1)
-	for _, rm := range relMatches {
-		if rm[1] != rootType && rm[1] != "edges" && rm[1] != "node" {
-			var relFields []string
-			for _, f := range strings.Fields(rm[2]) {
-				f = strings.TrimSpace(f)
-				if f != "" {
-					relFields = append(relFields, f)
-				}
-			}
-			relationships = append(relationships, relInfo{name: rm[1], fields: relFields})
-		}
-	}
-
+	// Parse the node body into fields and relationships
+	fields, relationships = parseNodeBody(nodeBody)
 	return
+}
+
+// findNodeBody finds the content inside the first `node { ... }` with proper brace matching.
+func findNodeBody(s string) string {
+	// Find "node" keyword followed by "{"
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], "node")
+		if pos < 0 {
+			return ""
+		}
+		pos += idx
+		// Make sure it's the word "node" (not part of another word)
+		after := pos + 4
+		if after < len(s) && (s[after] == ' ' || s[after] == '\t' || s[after] == '\n' || s[after] == '{') {
+			// Find the opening brace
+			braceStart := strings.Index(s[after:], "{")
+			if braceStart < 0 {
+				return ""
+			}
+			braceStart += after
+			return extractBraceContent(s, braceStart)
+		}
+		idx = pos + 4
+	}
+}
+
+// extractBraceContent extracts content between matching braces starting at position of '{'.
+func extractBraceContent(s string, openPos int) string {
+	depth := 0
+	for i := openPos; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[openPos+1 : i]
+			}
+		}
+	}
+	return ""
+}
+
+// parseNodeBody parses the content inside a node { ... } block into scalar fields and relationships.
+// A relationship is identified by a word followed by optional args and a `{`.
+func parseNodeBody(body string) (fields []string, rels []relInfo) {
+	body = strings.TrimSpace(body)
+	i := 0
+
+	for i < len(body) {
+		// Skip whitespace
+		for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r') {
+			i++
+		}
+		if i >= len(body) {
+			break
+		}
+
+		// Read a word (field or relationship name)
+		wordStart := i
+		for i < len(body) && isWordChar(body[i]) {
+			i++
+		}
+		if wordStart == i {
+			i++ // skip non-word char
+			continue
+		}
+		word := body[wordStart:i]
+
+		// Skip whitespace
+		for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r') {
+			i++
+		}
+
+		// Skip optional arguments: (sort: "name", filter: ...)
+		if i < len(body) && body[i] == '(' {
+			depth := 0
+			for i < len(body) {
+				if body[i] == '(' {
+					depth++
+				} else if body[i] == ')' {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+				i++
+			}
+			// Skip whitespace after args
+			for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r') {
+				i++
+			}
+		}
+
+		// Check if this is a relationship (has a { block) or a scalar field
+		if i < len(body) && body[i] == '{' {
+			// It's a relationship — extract its brace content
+			content := extractBraceContent(body, i)
+			// Advance past the closing brace
+			depth := 0
+			for i < len(body) {
+				if body[i] == '{' {
+					depth++
+				} else if body[i] == '}' {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+				i++
+			}
+
+			// Parse the relationship's inner content
+			// Look for edges { node { FIELDS } } pattern inside
+			relNodeBody := findNodeBody(content)
+			if relNodeBody != "" {
+				relFields, subRels := parseNodeBody(relNodeBody)
+				rels = append(rels, relInfo{name: word, fields: relFields, rels: subRels})
+			}
+		} else {
+			// It's a scalar field
+			fields = append(fields, word)
+		}
+	}
+	return
+}
+
+func isWordChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
 func parseMutation(query string, variables map[string]interface{}) (rootType string, op string, data map[string]interface{}) {
