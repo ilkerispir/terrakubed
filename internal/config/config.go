@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/ilkerispir/terrakubed/internal/model"
@@ -109,6 +110,24 @@ func getExecutorMode() string {
 	return ""
 }
 
+// getAwsAccessKey returns the AWS access key, or empty string if IAM role auth is enabled.
+// When AwsEnableRoleAuth=true, we force empty credentials so IRSA/Pod Identity is used.
+func getAwsAccessKey() string {
+	if getEnv("AwsEnableRoleAuth", "false") == "true" {
+		log.Println("AwsEnableRoleAuth=true, skipping static AWS credentials (using IAM role)")
+		return ""
+	}
+	return getEnvChain("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID")
+}
+
+// getAwsSecretKey returns the AWS secret key, or empty string if IAM role auth is enabled.
+func getAwsSecretKey() string {
+	if getEnv("AwsEnableRoleAuth", "false") == "true" {
+		return ""
+	}
+	return getEnvChain("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY")
+}
+
 // buildDatabaseURL constructs a PostgreSQL connection URL from Java-style env vars.
 // Java API uses: DatasourceHostname, DatasourceDatabase, DatasourceUser, DatasourcePassword,
 // DatasourcePort (default: 5432), DatasourceSslMode (default: disable).
@@ -144,8 +163,8 @@ func LoadConfig() (*Config, error) {
 		RegistryStorageType: getEnv("RegistryStorageType", "AWS"),
 		AwsBucketName:       getEnvChain("AwsStorageBucketName", "AWS_BUCKET_NAME", "AwsTerraformStateBucketName", "AwsTerraformOutputBucketName"),
 		AwsRegion:           getEnvChain("AwsStorageRegion", "AWS_REGION", "AwsTerraformStateRegion", "AwsTerraformOutputRegion"),
-		AwsAccessKey:        getEnvChain("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID", "AwsTerraformStateAccessKey"),
-		AwsSecretKey:        getEnvChain("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY", "AwsTerraformStateSecretKey"),
+		AwsAccessKey:        getAwsAccessKey(),
+		AwsSecretKey:        getAwsSecretKey(),
 		AwsEndpoint:         getEnv("AwsEndpoint", ""),
 
 		PatSecret:                 getEnv("PatSecret", ""),
