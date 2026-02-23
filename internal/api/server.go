@@ -84,6 +84,14 @@ func NewServer(config Config) (*Server, error) {
 	mux.HandleFunc("/tfoutput/v1/", outputHandler.GetOutput)
 	mux.HandleFunc("/context/v1/", contextHandler.GetContext)
 
+	// Token management endpoints (PAT + Team tokens)
+	patHandler := handler.NewPatHandler(db.Pool, config.PatSecret)
+	teamTokenHandler := handler.NewTeamTokenHandler(db.Pool, config.PatSecret, config.OwnerGroup)
+	mux.Handle("/pat/v1", patHandler)
+	mux.Handle("/pat/v1/", patHandler)
+	mux.Handle("/access-token/v1/teams", teamTokenHandler)
+	mux.Handle("/access-token/v1/teams/", teamTokenHandler)
+
 	// State & TFE endpoints
 	mux.Handle("/tfstate/v1/", stateHandler)
 	mux.Handle("/remote/tfe/v2/", tfeHandler)

@@ -395,17 +395,62 @@ func parseMutation(query string, variables map[string]interface{}) (rootType str
 // Helpers
 // ──────────────────────────────────────────────────
 
+// filterFields selects requested fields from a row and converts keys to camelCase.
+// GraphQL queries use camelCase (terraformVersion) but DB returns snake_case (terraform_version).
 func filterFields(row map[string]interface{}, fields []string) map[string]interface{} {
 	if len(fields) == 0 {
-		return row // Return all fields
+		// Return all fields, converted to camelCase
+		result := make(map[string]interface{}, len(row))
+		for k, v := range row {
+			result[snakeToCamel(k)] = v
+		}
+		return result
 	}
+
 	result := make(map[string]interface{})
 	for _, f := range fields {
+		// Try exact match first (camelCase from DB already converted)
 		if v, ok := row[f]; ok {
+			result[f] = v
+			continue
+		}
+		// Try snake_case version (UI sends camelCase, DB has snake_case)
+		snakeF := camelToSnake(f)
+		if v, ok := row[snakeF]; ok {
 			result[f] = v
 		}
 	}
 	return result
+}
+
+// snakeToCamel converts snake_case to camelCase: "terraform_version" → "terraformVersion"
+func snakeToCamel(s string) string {
+	parts := strings.Split(s, "_")
+	if len(parts) <= 1 {
+		return s
+	}
+	for i := 1; i < len(parts); i++ {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// camelToSnake converts camelCase to snake_case: "terraformVersion" → "terraform_version"
+func camelToSnake(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				result.WriteByte('_')
+			}
+			result.WriteRune(r + 32) // toLower
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }
 
 func wrapEdges(nodes []map[string]interface{}) []map[string]interface{} {
