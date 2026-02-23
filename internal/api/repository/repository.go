@@ -35,6 +35,8 @@ type ResourceMeta struct {
 	Children map[string]ChildRelation
 	// Soft-delete column (if any); rows where this column = true are excluded
 	SoftDeleteColumn string
+	// Default values for columns when not provided during creation
+	DefaultValues map[string]interface{}
 }
 
 // ParentRelation describes a ManyToOne/OneToOne FK relationship.
@@ -301,6 +303,15 @@ func (r *GenericRepository) Create(ctx context.Context, resourceType string, dat
 	var placeholders []string
 	var args []interface{}
 	argIdx := 1
+
+	// Apply default values for columns not provided
+	if meta.DefaultValues != nil {
+		for col, defaultVal := range meta.DefaultValues {
+			if _, exists := data[col]; !exists {
+				data[col] = defaultVal
+			}
+		}
+	}
 
 	for col, val := range data {
 		// Skip PK for auto-generated IDs

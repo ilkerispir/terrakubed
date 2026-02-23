@@ -75,6 +75,12 @@ func RegisterAll(repo *repository.GenericRepository) {
 			"step":    {ChildType: "step", FKColumn: "job_id"},
 			"address": {ChildType: "address", FKColumn: "job_id"},
 		},
+		DefaultValues: map[string]interface{}{
+			"status":       "pending",
+			"tcl":          "{}",
+			"refresh_only": false,
+			"plan_changes": false,
+		},
 	})
 
 	repo.Register(&repository.ResourceMeta{
