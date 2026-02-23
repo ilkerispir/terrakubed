@@ -27,6 +27,8 @@ type ResourceMeta struct {
 	Columns []string
 	// Map from db column name → struct field index
 	FieldMap map[string]int
+	// Map from db column name → JSON attribute name (from json struct tag)
+	JSONNames map[string]string
 	// Parent relationships: JSON:API relation name → FK column + parent type
 	Parents map[string]ParentRelation
 	// Children relationships: JSON:API relation name → child info
@@ -63,9 +65,10 @@ func NewGenericRepository(pool *pgxpool.Pool) *GenericRepository {
 
 // Register registers a ResourceMeta for a given JSON:API type.
 func (r *GenericRepository) Register(meta *ResourceMeta) {
-	// Build column list and field map from struct db tags
+	// Build column list, field map, and JSON name map from struct tags
 	meta.Columns = nil
 	meta.FieldMap = make(map[string]int)
+	meta.JSONNames = make(map[string]string)
 	for i := 0; i < meta.ModelType.NumField(); i++ {
 		field := meta.ModelType.Field(i)
 		// Handle embedded structs (e.g. AuditFields)
@@ -75,8 +78,12 @@ func (r *GenericRepository) Register(meta *ResourceMeta) {
 				dbTag := subField.Tag.Get("db")
 				if dbTag != "" && dbTag != "-" {
 					meta.Columns = append(meta.Columns, dbTag)
-					// Use a composite index: base field count + sub index
-					// We'll handle this via a flat scan approach
+					// Get JSON name from json tag
+					jsonTag := subField.Tag.Get("json")
+					if jsonTag != "" && jsonTag != "-" {
+						jsonName := strings.Split(jsonTag, ",")[0]
+						meta.JSONNames[dbTag] = jsonName
+					}
 				}
 			}
 			continue
@@ -85,6 +92,12 @@ func (r *GenericRepository) Register(meta *ResourceMeta) {
 		if dbTag != "" && dbTag != "-" {
 			meta.Columns = append(meta.Columns, dbTag)
 			meta.FieldMap[dbTag] = i
+			// Get JSON name from json tag
+			jsonTag := field.Tag.Get("json")
+			if jsonTag != "" && jsonTag != "-" {
+				jsonName := strings.Split(jsonTag, ",")[0]
+				meta.JSONNames[dbTag] = jsonName
+			}
 		}
 	}
 

@@ -56,9 +56,15 @@ func (h *JSONAPIHandler) buildConfigs() {
 				}
 			}
 
+			// Use JSON name from struct tag, fall back to CamelCase(column)
+			jsonAttr := jsonapi.CamelCase(col)
+			if jn, ok := meta.JSONNames[col]; ok {
+				jsonAttr = jn
+			}
+
 			config.Columns = append(config.Columns, jsonapi.ColumnMapping{
 				Column:        col,
-				JSONAttribute: jsonapi.CamelCase(col),
+				JSONAttribute: jsonAttr,
 				IsPK:          isPK,
 				IsFK:          isFK,
 				FKRelation:    fkRel,
