@@ -357,6 +357,35 @@ func (h *JSONAPIHandler) getResource(w http.ResponseWriter, r *http.Request, res
 
 	basePath := "/api/v1"
 	doc := jsonapi.SerializeSingle(config, row, basePath)
+
+	// Handle ?include=rel1,rel2,...
+	if includes := r.URL.Query().Get("include"); includes != "" {
+		for _, relName := range strings.Split(includes, ",") {
+			relName = strings.TrimSpace(relName)
+			childRel, ok := config.ChildRels[relName]
+			if !ok {
+				continue // Skip unknown relationships
+			}
+			childConfig, ok := h.configs[childRel.TargetType]
+			if !ok {
+				continue
+			}
+
+			childRows, err := h.repo.List(r.Context(), childRel.TargetType, repository.ListParams{
+				ParentFK: childRel.FKColumn,
+				ParentID: id,
+			})
+			if err != nil {
+				log.Printf("Error loading include %s for %s/%v: %v", relName, resourceType, id, err)
+				continue
+			}
+
+			for _, childRow := range childRows {
+				doc.Included = append(doc.Included, jsonapi.Serialize(childConfig, childRow, basePath))
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, doc)
 }
 
