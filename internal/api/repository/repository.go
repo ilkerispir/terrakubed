@@ -141,7 +141,7 @@ func (r *GenericRepository) List(ctx context.Context, resourceType string, param
 
 	// Soft-delete filter
 	if meta.SoftDeleteColumn != "" {
-		conditions = append(conditions, fmt.Sprintf("%s = false", meta.SoftDeleteColumn))
+		conditions = append(conditions, fmt.Sprintf("%s IS NOT TRUE", meta.SoftDeleteColumn))
 	}
 
 	// Parent FK filter
@@ -204,7 +204,7 @@ func (r *GenericRepository) FindByID(ctx context.Context, resourceType string, i
 	sb.WriteString(fmt.Sprintf(" WHERE %s = $1", meta.PKColumn))
 
 	if meta.SoftDeleteColumn != "" {
-		sb.WriteString(fmt.Sprintf(" AND %s = false", meta.SoftDeleteColumn))
+		sb.WriteString(fmt.Sprintf(" AND %s IS NOT TRUE", meta.SoftDeleteColumn))
 	}
 
 	rows, err := r.pool.Query(ctx, sb.String(), id)
