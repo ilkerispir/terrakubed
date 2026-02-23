@@ -48,7 +48,7 @@ func initStorage(cfg *config.Config) storage.StorageService {
 
 	switch storageType {
 	case "AWS", "AwsStorageImpl":
-		log.Printf("Initializing AWS storage: region=%s, bucket=%s, roleAuth=%v", cfg.AwsRegion, cfg.AwsBucketName, cfg.AwsEnableRoleAuth)
+		log.Printf("Initializing AWS storage: region=%s, bucket=%s", cfg.AwsRegion, cfg.AwsBucketName)
 		storageService, err = storage.NewAWSStorageService(
 			context.TODO(),
 			cfg.AwsRegion,
@@ -57,7 +57,6 @@ func initStorage(cfg *config.Config) storage.StorageService {
 			cfg.AwsEndpoint,
 			cfg.AwsAccessKey,
 			cfg.AwsSecretKey,
-			cfg.AwsEnableRoleAuth,
 		)
 	case "AZURE", "AzureStorageImpl":
 		storageService, err = storage.NewAzureStorageService(

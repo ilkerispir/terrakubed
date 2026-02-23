@@ -20,7 +20,6 @@ type Config struct {
 	AwsAccessKey              string
 	AwsSecretKey              string
 	AwsEndpoint               string
-	AwsEnableRoleAuth         bool
 	PatSecret                 string
 	InternalSecret            string
 	AzureStorageAccountName   string
@@ -107,16 +106,16 @@ func getExecutorMode() string {
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		// Registry
-		Port:                      getEnv("PORT", "8075"),
-		AzBuilderRegistry:         getEnv("AzBuilderRegistry", "http://localhost:8075"),
-		AzBuilderApiUrl:           getEnv("AzBuilderApiUrl", "http://localhost:8081"),
-		RegistryStorageType:       getEnv("RegistryStorageType", "AWS"),
-		AwsBucketName:             getEnvChain("AwsStorageBucketName", "AWS_BUCKET_NAME", "AwsTerraformStateBucketName", "AwsTerraformOutputBucketName"),
-		AwsRegion:                 getEnvChain("AwsStorageRegion", "AWS_REGION", "AwsTerraformStateRegion", "AwsTerraformOutputRegion"),
-		AwsAccessKey:              getEnvChain("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID", "AwsTerraformStateAccessKey"),
-		AwsSecretKey:              getEnvChain("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY", "AwsTerraformStateSecretKey"),
-		AwsEndpoint:               getEnv("AwsEndpoint", ""),
-		AwsEnableRoleAuth:         getEnv("AwsEnableRoleAuth", "false") == "true",
+		Port:                getEnv("PORT", "8075"),
+		AzBuilderRegistry:   getEnv("AzBuilderRegistry", "http://localhost:8075"),
+		AzBuilderApiUrl:     getEnv("AzBuilderApiUrl", "http://localhost:8081"),
+		RegistryStorageType: getEnv("RegistryStorageType", "AWS"),
+		AwsBucketName:       getEnvChain("AwsStorageBucketName", "AWS_BUCKET_NAME", "AwsTerraformStateBucketName", "AwsTerraformOutputBucketName"),
+		AwsRegion:           getEnvChain("AwsStorageRegion", "AWS_REGION", "AwsTerraformStateRegion", "AwsTerraformOutputRegion"),
+		AwsAccessKey:        getEnvChain("AwsStorageAccessKey", "AWS_ACCESS_KEY_ID", "AwsTerraformStateAccessKey"),
+		AwsSecretKey:        getEnvChain("AwsStorageSecretKey", "AWS_SECRET_ACCESS_KEY", "AwsTerraformStateSecretKey"),
+		AwsEndpoint:         getEnv("AwsEndpoint", ""),
+
 		PatSecret:                 getEnv("PatSecret", ""),
 		InternalSecret:            getEnv("InternalSecret", ""),
 		AzureStorageAccountName:   getEnv("AzureStorageAccountName", ""),

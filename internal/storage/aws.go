@@ -23,7 +23,7 @@ type AWSStorageService struct {
 	GitService git.GitService
 }
 
-func NewAWSStorageService(ctx context.Context, region, bucket, hostname, endpoint, accessKey, secretKey string, enableRoleAuth bool) (*AWSStorageService, error) {
+func NewAWSStorageService(ctx context.Context, region, bucket, hostname, endpoint, accessKey, secretKey string) (*AWSStorageService, error) {
 	// Custom resolver for endpoint if provided (e.g. MinIO)
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		if endpoint != "" {
@@ -40,13 +40,18 @@ func NewAWSStorageService(ctx context.Context, region, bucket, hostname, endpoin
 	cfgOptions = append(cfgOptions, config.WithRegion(region))
 	cfgOptions = append(cfgOptions, config.WithEndpointResolverWithOptions(customResolver))
 
-	if !enableRoleAuth {
+	if accessKey != "" && secretKey != "" {
+		// Use static credentials when provided
+		log.Printf("Using static AWS credentials (access key provided)")
 		cfgOptions = append(cfgOptions, config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{
 				AccessKeyID:     accessKey,
 				SecretAccessKey: secretKey,
 			}, nil
 		})))
+	} else {
+		// No credentials provided - use default credential chain (IAM Role, IRSA, Pod Identity, etc.)
+		log.Printf("No static AWS credentials provided, using IAM role / default credential chain")
 	}
 
 	cfg, err := config.LoadDefaultConfig(ctx, cfgOptions...)
