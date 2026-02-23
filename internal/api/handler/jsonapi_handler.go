@@ -114,6 +114,10 @@ func (h *JSONAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case len(segments) == 4 && segments[2] == "relationships":
 		// /api/v1/{type}/{id}/relationships/{rel} — Relationship link
 		h.handleRelationshipLink(w, r, segments[0], segments[1], segments[3])
+	case len(segments) == 4:
+		// /api/v1/{parentType}/{parentId}/{childType}/{childId}
+		// Nested resource access: resolve child by its ID directly
+		h.handleResource(w, r, segments[2], segments[3])
 	default:
 		writeError(w, http.StatusNotFound, "Invalid path")
 	}
