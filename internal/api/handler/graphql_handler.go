@@ -68,7 +68,7 @@ func (h *GraphQLHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("GraphQL query: %s", truncate(req.Query, 200))
+	log.Printf("GraphQL query: %s", truncate(req.Query, 500))
 
 	result, err := h.executeQuery(r.Context(), req.Query, req.Variables)
 	if err != nil {
@@ -78,7 +78,10 @@ func (h *GraphQLHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(graphQLResponse{Data: result})
+	resp := graphQLResponse{Data: result}
+	respBytes, _ := json.Marshal(resp)
+	log.Printf("GraphQL response: %s", truncate(string(respBytes), 500))
+	w.Write(respBytes)
 }
 
 // executeQuery parses an Elide-style GraphQL query and executes it.
@@ -129,7 +132,9 @@ func (h *GraphQLHandler) fetchByIDs(ctx context.Context, resourceType string, me
 		// Resolve relationships
 		for _, rel := range relationships {
 			relData, err := h.resolveRelationship(ctx, id, meta, rel)
-			if err == nil {
+			if err != nil {
+				log.Printf("GraphQL: error resolving rel %s for %s/%s: %v", rel.name, resourceType, id, err)
+			} else {
 				node[rel.name] = relData
 			}
 		}
@@ -158,7 +163,9 @@ func (h *GraphQLHandler) fetchAll(ctx context.Context, resourceType string, meta
 		id := fmt.Sprintf("%v", row[meta.PKColumn])
 		for _, rel := range relationships {
 			relData, err := h.resolveRelationship(ctx, id, meta, rel)
-			if err == nil {
+			if err != nil {
+				log.Printf("GraphQL: error resolving rel %s for %s/%s: %v", rel.name, resourceType, id, err)
+			} else {
 				node[rel.name] = relData
 			}
 		}
