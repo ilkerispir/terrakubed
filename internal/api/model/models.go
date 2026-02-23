@@ -136,6 +136,8 @@ type Workspace struct {
 	Source           string        `json:"source"           db:"source"`
 	Branch           string        `json:"branch"           db:"branch"`
 	Folder           string        `json:"folder"           db:"folder"`
+	LastJobStatus    JobStatus     `json:"lastJobStatus"    db:"last_job_status"`
+	LastJobDate      *time.Time    `json:"lastJobDate"      db:"last_job_date"`
 	Locked           bool          `json:"locked"           db:"locked"`
 	Deleted          bool          `json:"deleted"          db:"deleted"`
 	AllowRemoteApply bool          `json:"allowRemoteApply" db:"allow_remote_apply"`

@@ -187,18 +187,36 @@ func (h *GraphQLHandler) resolveRelationship(ctx context.Context, parentID strin
 		return nil, fmt.Errorf("unknown relationship: %s", rel.name)
 	}
 
-	// Query children using the FK column
+	// Get child meta for PK column
+	childMeta, _ := h.repo.GetMeta(childRel.ChildType)
+
+	// Build the list of DB columns to SELECT:
+	// - requested fields (camelCase → snake_case)
+	// - PK column (needed for sub-relationships)
+	// - FK column (needed for the WHERE clause)
+	colSet := make(map[string]bool)
+	colSet[childRel.FKColumn] = true
+	if childMeta != nil {
+		colSet[childMeta.PKColumn] = true
+	}
+	for _, f := range rel.fields {
+		colSet[camelToSnake(f)] = true
+	}
+	selectCols := make([]string, 0, len(colSet))
+	for c := range colSet {
+		selectCols = append(selectCols, c)
+	}
+
+	// Query children using the FK column, selecting only needed columns
 	params := repository.ListParams{
 		ParentFK: childRel.FKColumn,
 		ParentID: parentID,
+		Columns:  selectCols,
 	}
 	rows, err := h.repo.List(ctx, childRel.ChildType, params)
 	if err != nil {
 		return nil, err
 	}
-
-	// Get child meta for resolving nested relationships
-	childMeta, _ := h.repo.GetMeta(childRel.ChildType)
 
 	nodes := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {

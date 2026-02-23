@@ -119,6 +119,8 @@ type ListParams struct {
 	// Pagination
 	PageSize   int
 	PageOffset int
+	// Columns to select (if empty, selects all registered columns)
+	Columns []string
 }
 
 // List returns all rows for a resource type, applying filters and pagination.
@@ -128,10 +130,16 @@ func (r *GenericRepository) List(ctx context.Context, resourceType string, param
 		return nil, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
 
+	// Determine columns to select
+	selectCols := meta.Columns
+	if len(params.Columns) > 0 {
+		selectCols = params.Columns
+	}
+
 	// Build SELECT
 	var sb strings.Builder
 	sb.WriteString("SELECT ")
-	sb.WriteString(strings.Join(meta.Columns, ", "))
+	sb.WriteString(strings.Join(selectCols, ", "))
 	sb.WriteString(" FROM ")
 	sb.WriteString(meta.Table)
 
@@ -186,7 +194,7 @@ func (r *GenericRepository) List(ctx context.Context, resourceType string, param
 	}
 	defer rows.Close()
 
-	return scanRows(rows, meta.Columns)
+	return scanRows(rows, selectCols)
 }
 
 // FindByID returns a single row by primary key.
