@@ -8,22 +8,28 @@ import (
 
 	"github.com/ilkerispir/terrakubed/internal/api/database"
 	"github.com/ilkerispir/terrakubed/internal/api/handler"
+	"github.com/ilkerispir/terrakubed/internal/api/middleware"
 	"github.com/ilkerispir/terrakubed/internal/api/registry"
 	"github.com/ilkerispir/terrakubed/internal/api/repository"
 )
 
 // Config holds configuration for the API server.
 type Config struct {
-	DatabaseURL string
-	Port        int
+	DatabaseURL    string
+	Port           int
+	DexIssuerURI   string
+	PatSecret      string
+	InternalSecret string
+	OwnerGroup     string
+	UIURL          string
 }
 
 // Server is the main API server.
 type Server struct {
-	config Config
-	db     *database.Pool
-	repo   *repository.GenericRepository
-	mux    *http.ServeMux
+	config  Config
+	db      *database.Pool
+	repo    *repository.GenericRepository
+	handler http.Handler
 }
 
 // NewServer creates a new API server.
@@ -65,11 +71,24 @@ func NewServer(config Config) (*Server, error) {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Apply middleware chain: CORS → Auth → Router
+	authConfig := middleware.AuthConfig{
+		DexIssuerURI:   config.DexIssuerURI,
+		PatSecret:      config.PatSecret,
+		InternalSecret: config.InternalSecret,
+		OwnerGroup:     config.OwnerGroup,
+		UIURL:          config.UIURL,
+	}
+
+	var finalHandler http.Handler = mux
+	finalHandler = middleware.AuthMiddleware(authConfig)(finalHandler)
+	finalHandler = middleware.CORSMiddleware(config.UIURL)(finalHandler)
+
 	return &Server{
-		config: config,
-		db:     db,
-		repo:   repo,
-		mux:    mux,
+		config:  config,
+		db:      db,
+		repo:    repo,
+		handler: finalHandler,
 	}, nil
 }
 
@@ -77,7 +96,7 @@ func NewServer(config Config) (*Server, error) {
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	log.Printf("API server starting on %s", addr)
-	return http.ListenAndServe(addr, s.mux)
+	return http.ListenAndServe(addr, s.handler)
 }
 
 // Close closes the server and its resources.
