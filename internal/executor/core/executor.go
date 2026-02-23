@@ -265,7 +265,9 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 		scriptExec.ExecutePhase("onFailure")
 
 		output := logBuffer.String() + "\nError: " + err.Error()
-		p.Status.SetCompleted(job, false, output)
+		if statusErr := p.Status.SetCompleted(job, false, output); statusErr != nil {
+			log.Printf("Failed to set completed (failed) status: %v", statusErr)
+		}
 		return err
 	}
 

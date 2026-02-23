@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -90,10 +91,12 @@ func (r *RedisStreamer) Write(p []byte) (n int, err error) {
 }
 
 func (r *RedisStreamer) Close() error {
+	ctx := context.Background()
+
 	// Flush any remaining content in buffer
 	if r.buf.Len() > 0 {
 		lineNum := r.lineNumber.Add(1)
-		_ = r.client.XAdd(context.Background(), &redis.XAddArgs{
+		_ = r.client.XAdd(ctx, &redis.XAddArgs{
 			Stream: r.jobId,
 			Values: map[string]interface{}{
 				"jobId":      r.jobId,
@@ -105,8 +108,19 @@ func (r *RedisStreamer) Close() error {
 		r.buf.Reset()
 	}
 
-	// Delete the stream after completion (matching Java deleteLogs)
-	r.client.Del(context.Background(), r.jobId)
+	// Send a sentinel message so consumers know the stream is complete
+	_ = r.client.XAdd(ctx, &redis.XAddArgs{
+		Stream: r.jobId,
+		Values: map[string]interface{}{
+			"jobId":  r.jobId,
+			"stepId": r.stepId,
+			"done":   "true",
+		},
+	}).Err()
+
+	// Set TTL on the stream instead of deleting immediately,
+	// so the UI has time to read remaining logs
+	r.client.Expire(ctx, r.jobId, 5*time.Minute)
 
 	return r.client.Close()
 }

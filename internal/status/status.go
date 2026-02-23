@@ -86,12 +86,16 @@ func (s *Service) CreateHistory(job *model.TerraformJob, stateURL string) error 
 }
 
 // saveOutput uploads the terraform log output to object storage and returns the output URL path.
-// If upload fails, falls back to returning the raw output text so logs are still visible.
+// If upload fails, falls back to returning truncated raw output text so logs are still somewhat visible.
 func (s *Service) saveOutput(orgId, jobId, stepId, output string) string {
 	remotePath := fmt.Sprintf("tfoutput/%s/%s/%s.tfoutput", orgId, jobId, stepId)
 	if err := s.storage.UploadFile(remotePath, strings.NewReader(output)); err != nil {
 		log.Printf("Warning: failed to upload log output to storage: %v", err)
-		// Fall back to returning raw output text so logs are still visible in UI
+		// Fall back to truncated raw output so the API PATCH body stays small
+		const maxFallbackLen = 4096
+		if len(output) > maxFallbackLen {
+			output = output[len(output)-maxFallbackLen:]
+		}
 		return output
 	}
 	return s.getOutputPath(orgId, jobId, stepId)
