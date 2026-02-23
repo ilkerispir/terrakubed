@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 
 	"github.com/ilkerispir/terrakubed/internal/model"
@@ -150,8 +151,15 @@ func buildDatabaseURL() string {
 	port := getEnv("DatasourcePort", "5432")
 	sslMode := getEnv("DatasourceSslMode", "disable")
 
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		user, password, host, port, dbName, sslMode)
+	// Use net/url to properly encode credentials (password may contain special chars)
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     dbName,
+		RawQuery: fmt.Sprintf("sslmode=%s", sslMode),
+	}
+	return u.String()
 }
 
 func LoadConfig() (*Config, error) {
