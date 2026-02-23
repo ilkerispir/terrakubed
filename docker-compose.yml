@@ -1,0 +1,204 @@
+version: "3.8"
+
+# ─────────────────────────────────────────────────────────────
+# Terrakubed — Local Development Docker Compose
+# ─────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose up -d
+#   Open http://localhost:3000 (UI)
+#
+# All services use the same terrakubed binary with SERVICE_TYPE
+# ─────────────────────────────────────────────────────────────
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: terrakubed-postgres
+    environment:
+      POSTGRES_USER: terrakube
+      POSTGRES_PASSWORD: terrakube123
+      POSTGRES_DB: terrakube
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U terrakube" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: terrakubed-redis
+    command: redis-server --requirepass terrakube123
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "terrakube123", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: terrakubed-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001" # MinIO Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Create the S3 bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: terrakubed-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin;
+        mc mb local/terrakube --ignore-existing;
+        exit 0;
+      "
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.38.0
+    container_name: terrakubed-dex
+    command: [ "dex", "serve", "/etc/dex/config.yaml" ]
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./dex-config.yaml:/etc/dex/config.yaml:ro
+
+  # ── Terrakubed Services ─────────────────────────────────────
+
+  api:
+    build: .
+    container_name: terrakubed-api
+    environment:
+      SERVICE_TYPE: api
+      # Database
+      DatasourceHostname: postgres
+      DatasourceDatabase: terrakube
+      DatasourceUser: terrakube
+      DatasourcePassword: terrakube123
+      DatasourcePort: "5432"
+      DatasourceSslMode: disable
+      # Auth
+      PatSecret: RqyleUqe4+W3QOL8sjLx2WdtzB6CFRMJ7SPlhTQQpno=
+      InternalSecret: bzlvY5n27w6tgt4ghUbeH3ZDWG/ogjta3hXTF3gz81g=
+      DexIssuerUri: http://dex:5556/dex
+      TerrakubeUiURL: http://localhost:3000
+      TerrakubeHostname: http://localhost:8080
+      OwnerGroup: TERRAKUBE_ADMIN
+      # Storage (MinIO as S3)
+      RegistryStorageType: AWS
+      AwsStorageAccessKey: minioadmin
+      AwsStorageSecretKey: minioadmin
+      AwsStorageBucketName: terrakube
+      AwsStorageRegion: us-east-1
+      AwsEndpoint: http://minio:9000
+      # Redis
+      TerrakubeRedisHostname: redis
+      TerrakubeRedisPort: "6379"
+      TerrakubeRedisPassword: terrakube123
+      # Internal URLs
+      AzBuilderApiUrl: http://api:8080
+      AzBuilderRegistry: http://registry:8075
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  registry:
+    build: .
+    container_name: terrakubed-registry
+    environment:
+      SERVICE_TYPE: registry
+      # Auth
+      PatSecret: RqyleUqe4+W3QOL8sjLx2WdtzB6CFRMJ7SPlhTQQpno=
+      InternalSecret: bzlvY5n27w6tgt4ghUbeH3ZDWG/ogjta3hXTF3gz81g=
+      AuthenticationValidationTypeRegistry: DEX
+      DexIssuerUri: http://dex:5556/dex
+      AppClientId: terrakube-app
+      AppIssuerUri: http://dex:5556/dex
+      TerrakubeUiURL: http://localhost:3000
+      # Storage (MinIO as S3)
+      RegistryStorageType: AWS
+      AwsStorageAccessKey: minioadmin
+      AwsStorageSecretKey: minioadmin
+      AwsStorageBucketName: terrakube
+      AwsStorageRegion: us-east-1
+      AwsEndpoint: http://minio:9000
+      # Internal URLs
+      AzBuilderRegistry: http://registry:8075
+      AzBuilderApiUrl: http://api:8080
+    ports:
+      - "8075:8075"
+    depends_on:
+      - api
+      - minio-init
+
+  executor:
+    build: .
+    container_name: terrakubed-executor
+    environment:
+      SERVICE_TYPE: executor
+      # Auth
+      InternalSecret: bzlvY5n27w6tgt4ghUbeH3ZDWG/ogjta3hXTF3gz81g=
+      TerrakubeEnableSecurity: "true"
+      # Storage (MinIO as S3)
+      TerraformStateType: AwsTerraformStateImpl
+      AwsStorageAccessKey: minioadmin
+      AwsStorageSecretKey: minioadmin
+      AwsStorageBucketName: terrakube
+      AwsStorageRegion: us-east-1
+      AwsEndpoint: http://minio:9000
+      # Executor config
+      AzBuilderApiUrl: http://api:8080
+      TerrakubeRegistryDomain: localhost:8075
+      TerrakubeApiUrl: http://api:8080
+      ExecutorFlagBatch: "false"
+      # Redis
+      TerrakubeRedisHostname: redis
+      TerrakubeRedisPort: "6379"
+      TerrakubeRedisPassword: terrakube123
+    ports:
+      - "8090:8090"
+    depends_on:
+      - api
+
+  ui:
+    image: azbuilder/terrakube-ui:2.27.2
+    container_name: terrakubed-ui
+    ports:
+      - "3000:8080"
+    volumes:
+      - ./env-config.js:/usr/share/nginx/html/env-config.js:ro
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
