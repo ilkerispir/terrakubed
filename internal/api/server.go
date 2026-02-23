@@ -49,6 +49,9 @@ func NewServer(config Config) (*Server, error) {
 	repo := repository.NewGenericRepository(db.Pool)
 	registry.RegisterAll(repo)
 
+	// Validate model columns against actual DB schema
+	repo.ValidateColumns(ctx)
+
 	// Create JSON:API handler
 	jsonapiHandler := handler.NewJSONAPIHandler(repo)
 

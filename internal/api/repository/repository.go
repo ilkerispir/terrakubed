@@ -105,6 +105,52 @@ func (r *GenericRepository) Register(meta *ResourceMeta) {
 	log.Printf("Registered resource type: %s → table: %s (%d columns)", meta.Type, meta.Table, len(meta.Columns))
 }
 
+// ValidateColumns checks each registered resource's columns against the actual
+// database schema and removes any columns that don't exist in the DB table.
+// This prevents "column does not exist" errors when the Go model has columns
+// that haven't been migrated to the database yet.
+func (r *GenericRepository) ValidateColumns(ctx context.Context) {
+	for typeName, meta := range r.resources {
+		// Query actual columns from information_schema
+		query := `SELECT column_name FROM information_schema.columns WHERE table_name = $1`
+		rows, err := r.pool.Query(ctx, query, meta.Table)
+		if err != nil {
+			log.Printf("WARNING: could not validate columns for %s: %v", typeName, err)
+			continue
+		}
+
+		dbCols := make(map[string]bool)
+		for rows.Next() {
+			var col string
+			if err := rows.Scan(&col); err == nil {
+				dbCols[col] = true
+			}
+		}
+		rows.Close()
+
+		if len(dbCols) == 0 {
+			log.Printf("WARNING: table %s has no columns or does not exist", meta.Table)
+			continue
+		}
+
+		// Filter out columns that don't exist in the DB
+		var validCols []string
+		var removedCols []string
+		for _, col := range meta.Columns {
+			if dbCols[col] {
+				validCols = append(validCols, col)
+			} else {
+				removedCols = append(removedCols, col)
+			}
+		}
+
+		if len(removedCols) > 0 {
+			meta.Columns = validCols
+			log.Printf("WARNING: %s: removed %d non-existent columns: %v", typeName, len(removedCols), removedCols)
+		}
+	}
+}
+
 // GetMeta returns the ResourceMeta for a given type.
 func (r *GenericRepository) GetMeta(resourceType string) (*ResourceMeta, bool) {
 	meta, ok := r.resources[resourceType]
