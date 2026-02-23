@@ -184,11 +184,6 @@ func (h *JSONAPIHandler) handleResource(w http.ResponseWriter, r *http.Request, 
 // ──────────────────────────────────────────────────
 
 func (h *JSONAPIHandler) handleRelated(w http.ResponseWriter, r *http.Request, parentType, parentIDStr, relName string) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
 	parentConfig, ok := h.configs[parentType]
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("Unknown resource type: %s", parentType))
@@ -214,12 +209,60 @@ func (h *JSONAPIHandler) handleRelated(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
-	params := repository.ListParams{
-		ParentFK: childRel.FKColumn,
-		ParentID: parentID,
-	}
+	switch r.Method {
+	case http.MethodGet:
+		params := repository.ListParams{
+			ParentFK: childRel.FKColumn,
+			ParentID: parentID,
+		}
+		h.listResources(w, r, childRel.TargetType, childConfig, params)
+	case http.MethodPost:
+		// Create a child resource with parent FK automatically set
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "Failed to read body")
+			return
+		}
+		defer r.Body.Close()
 
-	h.listResources(w, r, childRel.TargetType, childConfig, params)
+		var reqDoc jsonapi.RequestDocument
+		if err := json.Unmarshal(body, &reqDoc); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON")
+			return
+		}
+
+		data := jsonapi.Deserialize(childConfig, reqDoc.Data)
+
+		// Set the parent FK from the URL path
+		data[childRel.FKColumn] = parentIDStr
+
+		// Generate UUID for PK if needed
+		childMeta, _ := h.repo.GetMeta(childRel.TargetType)
+		if childMeta != nil && childMeta.PKType == "uuid" {
+			if _, ok := data[childMeta.PKColumn]; !ok {
+				data[childMeta.PKColumn] = uuid.New().String()
+			}
+		}
+
+		id, err := h.repo.Create(r.Context(), childRel.TargetType, data)
+		if err != nil {
+			log.Printf("Error creating %s under %s/%v: %v", childRel.TargetType, parentType, parentID, err)
+			writeError(w, http.StatusInternalServerError, "Failed to create resource")
+			return
+		}
+
+		row, err := h.repo.FindByID(r.Context(), childRel.TargetType, id)
+		if err != nil || row == nil {
+			writeError(w, http.StatusInternalServerError, "Created but failed to reload")
+			return
+		}
+
+		basePath := "/api/v1"
+		doc := jsonapi.SerializeSingle(childConfig, row, basePath)
+		writeJSON(w, http.StatusCreated, doc)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
 }
 
 // ──────────────────────────────────────────────────
