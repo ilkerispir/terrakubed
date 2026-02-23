@@ -11,6 +11,7 @@ import (
 	"github.com/ilkerispir/terrakubed/internal/api/middleware"
 	"github.com/ilkerispir/terrakubed/internal/api/registry"
 	"github.com/ilkerispir/terrakubed/internal/api/repository"
+	"github.com/ilkerispir/terrakubed/internal/storage"
 )
 
 // Config holds configuration for the API server.
@@ -23,6 +24,7 @@ type Config struct {
 	InternalSecret string
 	OwnerGroup     string
 	UIURL          string
+	StorageType    string
 }
 
 // Server is the main API server.
@@ -55,8 +57,15 @@ func NewServer(config Config) (*Server, error) {
 	outputHandler := handler.NewTerraformOutputHandler(repo)
 	contextHandler := handler.NewContextHandler(repo)
 
+	// Create storage service
+	storageService, err := storage.NewStorageService(config.StorageType)
+	if err != nil {
+		log.Printf("Warning: storage service not available (%v), using nop", err)
+		storageService = &storage.NopStorageService{}
+	}
+
 	// State & TFE handlers
-	stateHandler := handler.NewTerraformStateHandler(db.Pool, config.Hostname)
+	stateHandler := handler.NewTerraformStateHandler(db.Pool, config.Hostname, storageService)
 	tfeHandler := handler.NewRemoteTFEHandler(db.Pool, config.Hostname)
 	wellKnownHandler := handler.NewWellKnownHandler(config.Hostname)
 

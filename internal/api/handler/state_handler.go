@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/ilkerispir/terrakubed/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,12 +19,12 @@ import (
 type TerraformStateHandler struct {
 	pool     *pgxpool.Pool
 	hostname string
-	// StorageService will be injected — for now, placeholders
+	storage  storage.StorageService
 }
 
 // NewTerraformStateHandler creates a new handler.
-func NewTerraformStateHandler(pool *pgxpool.Pool, hostname string) *TerraformStateHandler {
-	return &TerraformStateHandler{pool: pool, hostname: hostname}
+func NewTerraformStateHandler(pool *pgxpool.Pool, hostname string, storage storage.StorageService) *TerraformStateHandler {
+	return &TerraformStateHandler{pool: pool, hostname: hostname, storage: storage}
 }
 
 // ServeHTTP routes /tfstate/v1/ requests.
@@ -59,10 +61,19 @@ func (h *TerraformStateHandler) getState(w http.ResponseWriter, r *http.Request,
 
 	log.Printf("Get state: org=%s ws=%s file=%s", orgID, wsID, stateFile)
 
-	// TODO: Read from storage backend (S3/Azure/GCP)
+	// Read from storage backend
+	storagePath := fmt.Sprintf("tfstate/%s/%s/%s", orgID, wsID, stateFile)
+	reader, err := h.storage.DownloadFile(storagePath)
+	if err != nil {
+		log.Printf("Error reading state: %v", err)
+		http.Error(w, "State not found", http.StatusNotFound)
+		return
+	}
+	defer reader.Close()
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("{}"))
+	io.Copy(w, reader)
 }
 
 func (h *TerraformStateHandler) uploadHostedState(w http.ResponseWriter, r *http.Request, path string) {
@@ -99,7 +110,13 @@ func (h *TerraformStateHandler) uploadHostedState(w http.ResponseWriter, r *http
 		return
 	}
 
-	// TODO: Upload to storage backend
+	// Upload to storage backend
+	storagePath := fmt.Sprintf("tfstate/%s/%s/%s.tfstate", orgID, wsID, historyID)
+	if err := h.storage.UploadFile(storagePath, bytes.NewReader(body)); err != nil {
+		log.Printf("Error uploading state to storage: %v", err)
+		http.Error(w, "Failed to upload state", http.StatusInternalServerError)
+		return
+	}
 	log.Printf("Upload state: org=%s ws=%s history=%s (%d bytes)", orgID, wsID, historyID, len(body))
 
 	// Update history with output URL and MD5

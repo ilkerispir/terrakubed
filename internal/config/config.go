@@ -40,6 +40,12 @@ type Config struct {
 	EphemeralJobData        *model.TerraformJob
 	TerrakubeRegistryDomain string
 	StorageType             string
+
+	// API Specific
+	DatabaseURL string
+	Hostname    string
+	ApiPort     string
+	OwnerGroup  string
 }
 
 func getEnvWithFallback(primary, fallback string) string {
@@ -135,6 +141,12 @@ func LoadConfig() (*Config, error) {
 		Mode:                    getExecutorMode(),
 		TerrakubeRegistryDomain: getEnvWithFallback("TERRAKUBE_REGISTRY_DOMAIN", "TerrakubeRegistryDomain"),
 		StorageType:             getStorageType(),
+
+		// API
+		DatabaseURL: getEnvWithFallback("DATABASE_URL", "DatabaseUrl"),
+		Hostname:    getEnvWithFallback("TERRAKUBE_HOSTNAME", "TerrakubeHostname"),
+		ApiPort:     getEnv("API_PORT", "8080"),
+		OwnerGroup:  getEnvWithFallback("TERRAKUBE_OWNER", "TerrakubeOwner"),
 	}
 
 	// Override API / Secret if provided by executor envs

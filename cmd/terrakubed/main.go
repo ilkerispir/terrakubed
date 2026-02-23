@@ -3,8 +3,10 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 	"sync"
 
+	api "github.com/ilkerispir/terrakubed/internal/api"
 	"github.com/ilkerispir/terrakubed/internal/config"
 	"github.com/ilkerispir/terrakubed/internal/executor"
 	"github.com/ilkerispir/terrakubed/internal/registry"
@@ -36,6 +38,12 @@ func main() {
 	var wg sync.WaitGroup
 
 	switch serviceType {
+	case "api":
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startAPI(cfg)
+		}()
 	case "registry":
 		wg.Add(1)
 		go func() {
@@ -49,7 +57,11 @@ func main() {
 			startExecutor(cfg)
 		}()
 	case "all":
-		wg.Add(2)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			startAPI(cfg)
+		}()
 		go func() {
 			defer wg.Done()
 			startRegistry(cfg)
@@ -59,10 +71,41 @@ func main() {
 			startExecutor(cfg)
 		}()
 	default:
-		log.Fatalf("Unknown SERVICE_TYPE: %s. Supported values are: registry, executor, all", serviceType)
+		log.Fatalf("Unknown SERVICE_TYPE: %s. Supported values are: api, registry, executor, all", serviceType)
 	}
 
 	wg.Wait()
+}
+
+func startAPI(cfg *config.Config) {
+	log.Println("API service is starting...")
+
+	port, err := strconv.Atoi(cfg.ApiPort)
+	if err != nil {
+		port = 8080
+	}
+
+	apiConfig := api.Config{
+		DatabaseURL:    cfg.DatabaseURL,
+		Port:           port,
+		Hostname:       cfg.Hostname,
+		DexIssuerURI:   cfg.IssuerUri,
+		PatSecret:      cfg.PatSecret,
+		InternalSecret: cfg.InternalSecret,
+		OwnerGroup:     cfg.OwnerGroup,
+		UIURL:          cfg.TerrakubeUiURL,
+		StorageType:    cfg.StorageType,
+	}
+
+	server, err := api.NewServer(apiConfig)
+	if err != nil {
+		log.Fatalf("Failed to start API server: %v", err)
+	}
+	defer server.Close()
+
+	if err := server.Start(); err != nil {
+		log.Fatalf("API server failed: %v", err)
+	}
 }
 
 func startRegistry(cfg *config.Config) {
