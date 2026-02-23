@@ -1,0 +1,434 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+
+	"github.com/ilkerispir/terrakubed/internal/api/repository"
+)
+
+// GraphQLHandler handles Elide-compatible GraphQL requests at /graphql/api/v1.
+// Elide's GraphQL uses a connection/edges/node pattern:
+//
+//	query { organization { edges { node { id name } } } }
+//
+// This handler parses the query, extracts the resource type and requested fields,
+// then maps to the generic repository.
+type GraphQLHandler struct {
+	repo *repository.GenericRepository
+}
+
+// NewGraphQLHandler creates a new handler.
+func NewGraphQLHandler(repo *repository.GenericRepository) *GraphQLHandler {
+	return &GraphQLHandler{repo: repo}
+}
+
+// GraphQL request/response types
+type graphQLRequest struct {
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables,omitempty"`
+}
+
+type graphQLResponse struct {
+	Data   interface{} `json:"data,omitempty"`
+	Errors []gqlError  `json:"errors,omitempty"`
+}
+
+type gqlError struct {
+	Message string `json:"message"`
+}
+
+func (h *GraphQLHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeGQLError(w, "Failed to read request body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req graphQLRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeGQLError(w, "Invalid JSON")
+		return
+	}
+
+	log.Printf("GraphQL query: %s", truncate(req.Query, 200))
+
+	result, err := h.executeQuery(r.Context(), req.Query, req.Variables)
+	if err != nil {
+		log.Printf("GraphQL error: %v", err)
+		writeGQLError(w, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(graphQLResponse{Data: result})
+}
+
+// executeQuery parses an Elide-style GraphQL query and executes it.
+func (h *GraphQLHandler) executeQuery(ctx context.Context, query string, variables map[string]interface{}) (interface{}, error) {
+	query = strings.TrimSpace(query)
+
+	// Determine if it's a query or mutation
+	if strings.HasPrefix(query, "mutation") {
+		return h.executeMutation(ctx, query, variables)
+	}
+
+	// Parse the root resource type from the query
+	// Pattern: { resourceType { edges { node { field1 field2 } } } }
+	// or: { resourceType(ids: ["..."]) { edges { node { field1 field2 } } } }
+	rootType, ids, fields, relationships := parseGraphQLQuery(query)
+	if rootType == "" {
+		return nil, fmt.Errorf("could not parse query")
+	}
+
+	log.Printf("GraphQL: type=%s ids=%v fields=%v rels=%v", rootType, ids, fields, relationships)
+
+	// Check if the resource type is registered
+	meta, ok := h.repo.GetMeta(rootType)
+	if !ok {
+		return nil, fmt.Errorf("unknown resource type: %s", rootType)
+	}
+
+	// Build the result
+	if len(ids) > 0 {
+		// Fetch specific records by ID
+		return h.fetchByIDs(ctx, rootType, meta, ids, fields, relationships)
+	}
+
+	// List all records
+	return h.fetchAll(ctx, rootType, meta, fields, relationships)
+}
+
+func (h *GraphQLHandler) fetchByIDs(ctx context.Context, resourceType string, meta *repository.ResourceMeta, ids []string, fields []string, relationships []relInfo) (interface{}, error) {
+	nodes := make([]map[string]interface{}, 0)
+
+	for _, id := range ids {
+		row, err := h.repo.FindByID(ctx, resourceType, id)
+		if err != nil {
+			continue
+		}
+		node := filterFields(row, fields)
+
+		// Resolve relationships
+		for _, rel := range relationships {
+			relData, err := h.resolveRelationship(ctx, id, meta, rel)
+			if err == nil {
+				node[rel.name] = relData
+			}
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	return map[string]interface{}{
+		resourceType: map[string]interface{}{
+			"edges": wrapEdges(nodes),
+		},
+	}, nil
+}
+
+func (h *GraphQLHandler) fetchAll(ctx context.Context, resourceType string, meta *repository.ResourceMeta, fields []string, relationships []relInfo) (interface{}, error) {
+	rows, err := h.repo.List(ctx, resourceType, repository.ListParams{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list %s: %w", resourceType, err)
+	}
+
+	nodes := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		node := filterFields(row, fields)
+
+		// Resolve relationships
+		id := fmt.Sprintf("%v", row[meta.PKColumn])
+		for _, rel := range relationships {
+			relData, err := h.resolveRelationship(ctx, id, meta, rel)
+			if err == nil {
+				node[rel.name] = relData
+			}
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	return map[string]interface{}{
+		resourceType: map[string]interface{}{
+			"edges": wrapEdges(nodes),
+		},
+	}, nil
+}
+
+func (h *GraphQLHandler) resolveRelationship(ctx context.Context, parentID string, parentMeta *repository.ResourceMeta, rel relInfo) (interface{}, error) {
+	// Check if this is a child relationship
+	childRel, ok := parentMeta.Children[rel.name]
+	if !ok {
+		return nil, fmt.Errorf("unknown relationship: %s", rel.name)
+	}
+
+	// Query children using the FK column
+	params := repository.ListParams{
+		ParentFK: childRel.FKColumn,
+		ParentID: parentID,
+	}
+	rows, err := h.repo.List(ctx, childRel.ChildType, params)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		nodes = append(nodes, filterFields(row, rel.fields))
+	}
+
+	return map[string]interface{}{
+		"edges": wrapEdges(nodes),
+	}, nil
+}
+
+// executeMutation handles create/update/delete mutations.
+func (h *GraphQLHandler) executeMutation(ctx context.Context, query string, variables map[string]interface{}) (interface{}, error) {
+	// Elide mutations look like:
+	// mutation { organization(op: UPSERT, data: {id: "...", name: "..."}) { edges { node { id name } } } }
+	// mutation { organization(op: DELETE, ids: ["..."]) { edges { node { id } } } }
+	log.Printf("GraphQL mutation: %s", truncate(query, 200))
+
+	rootType, op, data := parseMutation(query, variables)
+	if rootType == "" {
+		return nil, fmt.Errorf("could not parse mutation")
+	}
+
+	_, ok := h.repo.GetMeta(rootType)
+	if !ok {
+		return nil, fmt.Errorf("unknown resource type: %s", rootType)
+	}
+
+	switch strings.ToUpper(op) {
+	case "UPSERT":
+		id, _ := data["id"].(string)
+		if id != "" {
+			// Update
+			if err := h.repo.Update(ctx, rootType, id, data); err != nil {
+				return nil, err
+			}
+			row, err := h.repo.FindByID(ctx, rootType, id)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{
+				rootType: map[string]interface{}{
+					"edges": wrapEdges([]map[string]interface{}{row}),
+				},
+			}, nil
+		}
+		// Create
+		newID, err := h.repo.Create(ctx, rootType, data)
+		if err != nil {
+			return nil, err
+		}
+		row, err := h.repo.FindByID(ctx, rootType, newID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			rootType: map[string]interface{}{
+				"edges": wrapEdges([]map[string]interface{}{row}),
+			},
+		}, nil
+
+	case "DELETE":
+		id, _ := data["id"].(string)
+		if id == "" {
+			return nil, fmt.Errorf("DELETE requires id")
+		}
+		if err := h.repo.Delete(ctx, rootType, id); err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{rootType: nil}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown operation: %s", op)
+	}
+}
+
+// ──────────────────────────────────────────────────
+// Query parsing helpers
+// ──────────────────────────────────────────────────
+
+type relInfo struct {
+	name   string
+	fields []string
+}
+
+var (
+	// Matches root type: { organization { ... } }
+	rootTypeRe = regexp.MustCompile(`(?:query\s*(?:\w+)?\s*)?[{]\s*(\w+)`)
+	// Matches ids parameter: (ids: ["id1", "id2"])
+	idsRe = regexp.MustCompile(`\(\s*ids?\s*:\s*\[([^\]]*)\]`)
+	// Matches single id filter: (id: "uuid")
+	singleIDRe = regexp.MustCompile(`\(\s*ids?\s*:\s*"([^"]+)"`)
+	// Matches field names inside node { ... }
+	nodeFieldsRe = regexp.MustCompile(`node\s*\{([^}]+)\}`)
+)
+
+func parseGraphQLQuery(query string) (rootType string, ids []string, fields []string, relationships []relInfo) {
+	// Extract root type
+	matches := rootTypeRe.FindStringSubmatch(query)
+	if len(matches) < 2 {
+		return
+	}
+	rootType = matches[1]
+
+	// Remove query wrapper to get inner content
+	// Skip "query" keyword and opening brace
+	inner := query
+	if idx := strings.Index(inner, rootType); idx >= 0 {
+		inner = inner[idx+len(rootType):]
+	}
+
+	// Extract IDs if present
+	if idMatches := idsRe.FindStringSubmatch(inner); len(idMatches) >= 2 {
+		for _, id := range strings.Split(idMatches[1], ",") {
+			id = strings.Trim(strings.TrimSpace(id), `"'`)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	} else if singleMatch := singleIDRe.FindStringSubmatch(inner); len(singleMatch) >= 2 {
+		ids = append(ids, singleMatch[1])
+	}
+
+	// Extract node fields
+	if nodeMatch := nodeFieldsRe.FindStringSubmatch(inner); len(nodeMatch) >= 2 {
+		nodeContent := nodeMatch[1]
+		for _, f := range strings.Fields(nodeContent) {
+			f = strings.TrimSpace(f)
+			if f != "" && f != "{" && f != "}" {
+				fields = append(fields, f)
+			}
+		}
+	}
+
+	// Extract relationships (nested resources with their own edges/node)
+	// Pattern: relationship { edges { node { field1 field2 } } }
+	relRe := regexp.MustCompile(`(\w+)\s*\{[^{}]*edges\s*\{[^{}]*node\s*\{([^}]+)\}`)
+	relMatches := relRe.FindAllStringSubmatch(inner, -1)
+	for _, rm := range relMatches {
+		if rm[1] != rootType && rm[1] != "edges" && rm[1] != "node" {
+			var relFields []string
+			for _, f := range strings.Fields(rm[2]) {
+				f = strings.TrimSpace(f)
+				if f != "" {
+					relFields = append(relFields, f)
+				}
+			}
+			relationships = append(relationships, relInfo{name: rm[1], fields: relFields})
+		}
+	}
+
+	return
+}
+
+func parseMutation(query string, variables map[string]interface{}) (rootType string, op string, data map[string]interface{}) {
+	data = make(map[string]interface{})
+
+	// Extract root type after "mutation"
+	matches := regexp.MustCompile(`mutation\s*(?:\w+)?\s*[{]\s*(\w+)`).FindStringSubmatch(query)
+	if len(matches) < 2 {
+		return
+	}
+	rootType = matches[1]
+
+	// Extract operation
+	opMatch := regexp.MustCompile(`op\s*:\s*(\w+)`).FindStringSubmatch(query)
+	if len(opMatch) >= 2 {
+		op = opMatch[1]
+	}
+
+	// For now, extract data from variables if present
+	if variables != nil {
+		if d, ok := variables["data"]; ok {
+			if dm, ok := d.(map[string]interface{}); ok {
+				data = dm
+			}
+		}
+	}
+
+	// Try to extract inline data: data: { key: "value" ... }
+	dataMatch := regexp.MustCompile(`data\s*:\s*\{([^}]+)\}`).FindStringSubmatch(query)
+	if len(dataMatch) >= 2 {
+		pairs := regexp.MustCompile(`(\w+)\s*:\s*"([^"]*)"`).FindAllStringSubmatch(dataMatch[1], -1)
+		for _, p := range pairs {
+			data[p[1]] = p[2]
+		}
+	}
+
+	// Extract IDs for delete
+	if idsMatch := idsRe.FindStringSubmatch(query); len(idsMatch) >= 2 {
+		for _, id := range strings.Split(idsMatch[1], ",") {
+			id = strings.Trim(strings.TrimSpace(id), `"'`)
+			if id != "" {
+				data["id"] = id
+				break
+			}
+		}
+	}
+
+	return
+}
+
+// ──────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────
+
+func filterFields(row map[string]interface{}, fields []string) map[string]interface{} {
+	if len(fields) == 0 {
+		return row // Return all fields
+	}
+	result := make(map[string]interface{})
+	for _, f := range fields {
+		if v, ok := row[f]; ok {
+			result[f] = v
+		}
+	}
+	return result
+}
+
+func wrapEdges(nodes []map[string]interface{}) []map[string]interface{} {
+	edges := make([]map[string]interface{}, len(nodes))
+	for i, node := range nodes {
+		edges[i] = map[string]interface{}{"node": node}
+	}
+	return edges
+}
+
+func writeGQLError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK) // GraphQL always returns 200
+	json.NewEncoder(w).Encode(graphQLResponse{
+		Errors: []gqlError{{Message: msg}},
+	})
+}
+
+func truncate(s string, maxLen int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}

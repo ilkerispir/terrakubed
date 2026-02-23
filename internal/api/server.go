@@ -72,6 +72,10 @@ func NewServer(config Config) (*Server, error) {
 	// Set up routes
 	mux := http.NewServeMux()
 
+	// GraphQL endpoint (Elide-compatible, used by the UI)
+	graphqlHandler := handler.NewGraphQLHandler(repo)
+	mux.Handle("/graphql/api/v1", graphqlHandler)
+
 	// JSON:API CRUD endpoints
 	mux.Handle("/api/v1/", jsonapiHandler)
 
