@@ -109,6 +109,32 @@ func getExecutorMode() string {
 	return ""
 }
 
+// buildDatabaseURL constructs a PostgreSQL connection URL from Java-style env vars.
+// Java API uses: DatasourceHostname, DatasourceDatabase, DatasourceUser, DatasourcePassword,
+// DatasourcePort (default: 5432), DatasourceSslMode (default: disable).
+// If DATABASE_URL is provided directly, it takes precedence.
+func buildDatabaseURL() string {
+	// Check if DATABASE_URL is provided directly
+	if url := getEnvWithFallback("DATABASE_URL", "DatabaseUrl"); url != "" {
+		return url
+	}
+
+	// Build from individual env vars (matching Java API's application.properties)
+	host := getEnv("DatasourceHostname", "")
+	if host == "" {
+		return "" // No database configured
+	}
+
+	dbName := getEnv("DatasourceDatabase", "")
+	user := getEnv("DatasourceUser", "")
+	password := getEnv("DatasourcePassword", "")
+	port := getEnv("DatasourcePort", "5432")
+	sslMode := getEnv("DatasourceSslMode", "disable")
+
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		user, password, host, port, dbName, sslMode)
+}
+
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		// Registry
@@ -143,7 +169,7 @@ func LoadConfig() (*Config, error) {
 		StorageType:             getStorageType(),
 
 		// API
-		DatabaseURL: getEnvWithFallback("DATABASE_URL", "DatabaseUrl"),
+		DatabaseURL: buildDatabaseURL(),
 		Hostname:    getEnvWithFallback("TERRAKUBE_HOSTNAME", "TerrakubeHostname"),
 		ApiPort:     getEnv("API_PORT", "8080"),
 		OwnerGroup:  getEnvWithFallback("TERRAKUBE_OWNER", "TerrakubeOwner"),
