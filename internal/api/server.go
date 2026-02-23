@@ -85,11 +85,16 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("/remote/tfe/v2/", tfeHandler)
 	mux.Handle("/.well-known/terraform.json", wellKnownHandler)
 
-	// Health check
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// Health check — compatible with Spring Boot actuator probes
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+		w.Write([]byte(`{"status":"UP"}`))
+	}
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/actuator/health", healthHandler)
+	mux.HandleFunc("/actuator/health/readiness", healthHandler)
+	mux.HandleFunc("/actuator/health/liveness", healthHandler)
 
 	// Apply middleware chain: CORS → Auth → Router
 	authConfig := middleware.AuthConfig{
