@@ -78,8 +78,10 @@ func RegisterAll(repo *repository.GenericRepository) {
 		DefaultValues: map[string]interface{}{
 			"status":       "pending",
 			"tcl":          "{}",
+			"refresh":      true,
 			"refresh_only": false,
-			"plan_changes": false,
+			"plan_changes": true,
+			"auto_apply":   false,
 		},
 	})
 
