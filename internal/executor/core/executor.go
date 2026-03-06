@@ -216,7 +216,7 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 	// 5. Execute Command
 	var executionErr error
 	switch job.Type {
-	case "terraformPlan", "terraformApply", "terraformDestroy":
+	case "terraformPlan", "terraformPlanDestroy", "terraformApply", "terraformDestroy":
 		executionErr = p.executeTerraform(job, workingDir, streamer, &logBuffer)
 
 	case "customScripts", "approval":
@@ -281,7 +281,7 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 
 	// Set final status based on result
 	output := logBuffer.String()
-	if job.Type == "terraformPlan" && result != nil && result.ExitCode == 2 {
+	if (job.Type == "terraformPlan" || job.Type == "terraformPlanDestroy") && result != nil && result.ExitCode == 2 {
 		if err := p.Status.SetPending(job, output); err != nil {
 			log.Printf("Failed to set pending status: %v", err)
 		}

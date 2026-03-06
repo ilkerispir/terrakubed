@@ -118,7 +118,9 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 
 	switch e.Job.Type {
 	case "terraformPlan":
-		result, err = e.executePlan(ctx)
+		result, err = e.executePlan(ctx, false)
+	case "terraformPlanDestroy":
+		result, err = e.executePlan(ctx, true)
 	case "terraformApply":
 		err = e.executeApply(ctx)
 	case "terraformDestroy":
@@ -137,11 +139,14 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 	return result, nil
 }
 
-func (e *Executor) executePlan(ctx context.Context) (*ExecutionResult, error) {
+func (e *Executor) executePlan(ctx context.Context, isDestroy bool) (*ExecutionResult, error) {
 	planFile := filepath.Join(e.WorkingDir, "terraform.tfplan")
 
 	args := []string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile}
 
+	if isDestroy {
+		args = append(args, "-destroy")
+	}
 	if e.Job.Refresh {
 		args = append(args, "-refresh=true")
 	}
