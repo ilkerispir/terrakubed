@@ -255,6 +255,7 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 
 	if err != nil {
 		scriptExec.ExecutePhase("onFailure")
+		p.notifySlackOnFailure(job)
 
 		output := logBuffer.String() + "\nError: " + err.Error()
 		if statusErr := p.Status.SetCompleted(job, false, output); statusErr != nil {
