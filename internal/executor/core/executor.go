@@ -244,6 +244,11 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 		return fmt.Errorf("failed to generate terraform credentials: %w", err)
 	}
 
+	// Notify: approval was given, operation is starting (apply / destroy only)
+	if job.Type == "terraformApply" || job.Type == "terraformDestroy" {
+		p.notifySlackApproved(job)
+	}
+
 	// Execute beforeInit scripts
 	scriptExec := script.NewExecutor(job, workingDir, streamer)
 	if err := scriptExec.ExecutePhase("beforeInit"); err != nil {
@@ -272,15 +277,25 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 	// Upload State and Output
 	p.uploadStateAndOutput(job, workingDir)
 
-	// Set final status based on result
+	// Set final status and send matching Slack notification
 	output := logBuffer.String()
-	if (job.Type == "terraformPlan" || job.Type == "terraformPlanDestroy") && result != nil && result.ExitCode == 2 {
+	isPlan := job.Type == "terraformPlan" || job.Type == "terraformPlanDestroy"
+	if isPlan && result != nil && result.ExitCode == 2 {
+		// Plan has changes → pending approval
 		if err := p.Status.SetPending(job, output); err != nil {
 			log.Printf("Failed to set pending status: %v", err)
 		}
+		p.notifySlackPlanPending(job)
 	} else {
 		if err := p.Status.SetCompleted(job, true, output); err != nil {
 			log.Printf("Failed to set completed status: %v", err)
+		}
+		if isPlan {
+			// Plan exit 0 → no changes
+			p.notifySlackPlanNoChanges(job)
+		} else {
+			// Apply or Destroy succeeded
+			p.notifySlackSuccess(job)
 		}
 	}
 
