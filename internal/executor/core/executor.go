@@ -189,11 +189,18 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 	}
 
 	// 4. Download Pre-existing State
-	remotePath := fmt.Sprintf("organization/%s/workspace/%s/state/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
+	// Primary path matches Java API / TFC migration protocol: tfstate/{orgId}/{wsId}/terraform.tfstate
+	// Fallback path is the legacy Go executor path for backward compatibility.
+	remotePath := fmt.Sprintf("tfstate/%s/%s/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
 	stateReader, err := p.Storage.DownloadFile(remotePath)
 	if err != nil {
-		log.Printf("No existing state found (this is normal for new workspaces): %v", err)
-	} else if stateReader != nil {
+		remotePath = fmt.Sprintf("organization/%s/workspace/%s/state/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
+		stateReader, err = p.Storage.DownloadFile(remotePath)
+		if err != nil {
+			log.Printf("No existing state found (this is normal for new workspaces): %v", err)
+		}
+	}
+	if stateReader != nil {
 		defer stateReader.Close()
 		localStatePath := filepath.Join(workingDir, "terraform.tfstate")
 		f, err := os.Create(localStatePath)

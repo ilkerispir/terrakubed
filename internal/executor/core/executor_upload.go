@@ -18,7 +18,8 @@ func (p *JobProcessor) uploadStateAndOutput(job *model.TerraformJob, workingDir 
 		f, err := os.Open(statePath)
 		if err == nil {
 			defer f.Close()
-			remotePath := fmt.Sprintf("organization/%s/workspace/%s/state/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
+			// Use same path as Java API / TFC migration protocol
+			remotePath := fmt.Sprintf("tfstate/%s/%s/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
 			if err := p.Storage.UploadFile(remotePath, f); err != nil {
 				log.Printf("Failed to upload state: %v", err)
 			}
