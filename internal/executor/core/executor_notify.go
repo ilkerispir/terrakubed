@@ -74,14 +74,35 @@ func (p *JobProcessor) slackSend(webhookURL, color, title string, job *model.Ter
 	}
 
 	wsText := wsName
-	if uiURL != "" {
-		// Normalize: add https:// only if no scheme is present
-		baseURL := strings.TrimRight(uiURL, "/")
-		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-			baseURL = "https://" + baseURL
+
+	// Determine the run URL:
+	//   - Explicit UI URL → direct link: {uiURL}/organizations/{orgId}/workspaces/{wsId}/runs/{jobId}
+	//   - API URL fallback  → redirect: {apiURL}/app/{orgId}/{wsId}/runs/{jobId}
+	//     (RedirectController on the API resolves org/ws from jobId and redirects to the UI)
+	explicitUI := p.Config.TerrakubeUiURL
+	if explicitUI == "" {
+		explicitUI = job.EnvironmentVariables["TERRAKUBE_UI_URL"]
+	}
+
+	var runURL string
+	if explicitUI != "" {
+		base := strings.TrimRight(explicitUI, "/")
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "https://" + base
 		}
-		runURL := fmt.Sprintf("%s/organizations/%s/workspaces/%s/runs/%s",
-			baseURL, job.OrganizationId, job.WorkspaceId, job.JobId)
+		runURL = fmt.Sprintf("%s/organizations/%s/workspaces/%s/runs/%s",
+			base, job.OrganizationId, job.WorkspaceId, job.JobId)
+	} else if uiURL != "" {
+		// uiURL is AzBuilderApiUrl here — use the /app/ redirect endpoint
+		base := strings.TrimRight(uiURL, "/")
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "https://" + base
+		}
+		runURL = fmt.Sprintf("%s/app/%s/%s/runs/%s",
+			base, job.OrganizationId, job.WorkspaceId, job.JobId)
+	}
+
+	if runURL != "" {
 		wsText = fmt.Sprintf("<%s|%s>", runURL, wsName)
 	}
 
