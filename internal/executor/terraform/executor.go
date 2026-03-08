@@ -108,8 +108,9 @@ func (e *Executor) Execute() (*ExecutionResult, error) {
 		e.Streamer.Write([]byte(header))
 	}
 
-	// Init with color support (direct execution)
-	err := e.runTerraformDirect("init", "-input=false", "-upgrade")
+	// Init with -reconfigure so Terraform adopts the backend override (terrakube_override.tf)
+	// without prompting for state migration, which would fail in non-interactive mode.
+	err := e.runTerraformDirect("init", "-input=false", "-upgrade", "-reconfigure")
 	if err != nil {
 		return nil, fmt.Errorf("error running Init: %s", err)
 	}

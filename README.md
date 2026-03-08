@@ -139,6 +139,22 @@ flow:
 
 ## 📦 Changelog
 
+### v0.0.51 — Direct cloud storage backend (state persistence fix)
+- **Root cause fixed**: The executor was using a local backend + manual state upload, which could silently lose state if the upload failed. Plan would then show all resources as "to add" on every run.
+- `generateBackendOverride` now writes a real S3 / AzureRM / GCS backend block into `terrakube_override.tf`, matching the Java executor's approach exactly. Terraform reads and writes state directly to cloud storage — no manual download or upload required.
+- `terraform init` now passes `-reconfigure` so it adopts the new backend without prompting for state migration in non-interactive mode.
+- Manual `terraform.tfstate` download/upload removed from `ProcessJob` and `uploadStateAndOutput`.
+- State history JSON now uses a UUID filename (`{UUID}.json`) and the correct history URL format: `{api_url}/tfstate/v1/organization/{orgId}/workspace/{wsId}/state/{UUID}.json` — matching the Java API's `TerraformStatePathService`.
+- Local storage type falls back to a local file backend (unchanged behaviour for local dev).
+
+### v0.0.50 — Fix apply stuck in queue after approval
+- `SetApprovalCompleted` sets job status to `"pending"` (was `"queue"`).
+- Java API `ScheduleJob` switch: `queue` → default (no-op), `pending` → `executePendingJob()` which dispatches the apply/destroy step.
+
+### v0.0.49 — Fix apply notExecuted after approval gate
+- `approval`-type step now calls `SetApprovalCompleted` instead of `SetCompleted`. `SetCompleted` was setting job=`"completed"`, causing the Java API to mark all remaining steps as `notExecuted`.
+- Plan file stored at job-level path (no step ID): `organization/{orgId}/{wsId}/job/{jobId}/plan/terraformLibrary.tfplan`. Apply step now reliably finds it regardless of its own step ID.
+
 ### v0.0.48 — Use executor config `TerrakubeUiURL` for workspace links
 - Slack `slackSend()` now reads `TerrakubeUiURL` from the executor's deployment config first (`TerrakubeUiURL` / `TERRAKUBE_UI_URL` env on the executor Deployment/Job), then falls back to the workspace-level `TERRAKUBE_UI_URL` env var.
 - No need to set `TERRAKUBE_UI_URL` as a global org env var — if the executor deployment already has it, Slack links work automatically.

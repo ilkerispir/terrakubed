@@ -101,18 +101,74 @@ func (p *JobProcessor) generateTerraformCredentials(job *model.TerraformJob, wor
 	return os.WriteFile(rcPath, []byte(content), 0644)
 }
 
+// generateBackendOverride creates terrakube_override.tf that redirects Terraform's backend
+// to the same cloud storage bucket Terrakube uses — matching the Java executor's approach.
+// Terraform reads/writes state directly to cloud storage; no separate download/upload needed.
 func (p *JobProcessor) generateBackendOverride(job *model.TerraformJob, workingDir string) error {
-	statePath := filepath.Join(workingDir, "terraform.tfstate")
-	overrideContent := fmt.Sprintf(`terraform {
-  backend "local" {
-    path = "%s"
-  }
-}
-`, statePath)
+	stateKey := fmt.Sprintf("tfstate/%s/%s/terraform.tfstate", job.OrganizationId, job.WorkspaceId)
+	var overrideContent string
+
+	switch p.Config.StorageType {
+	case "AWS":
+		overrideContent = p.generateAwsBackend(stateKey)
+	case "AZURE":
+		overrideContent = p.generateAzureBackend(job.OrganizationId, job.WorkspaceId)
+	case "GCP":
+		overrideContent = p.generateGcpBackend(job.OrganizationId, job.WorkspaceId)
+	default:
+		// LOCAL or unknown: fall back to a local file in the working directory
+		statePath := filepath.Join(workingDir, "terraform.tfstate")
+		overrideContent = fmt.Sprintf("terraform {\n  backend \"local\" {\n    path = \"%s\"\n  }\n}\n", statePath)
+		log.Printf("generateBackendOverride: using local backend at %s", statePath)
+	}
 
 	overridePath := filepath.Join(workingDir, "terrakube_override.tf")
-	log.Printf("generateBackendOverride: using local backend with state at %s", statePath)
+	log.Printf("generateBackendOverride: storageType=%s stateKey=%s", p.Config.StorageType, stateKey)
 	return os.WriteFile(overridePath, []byte(overrideContent), 0644)
+}
+
+func (p *JobProcessor) generateAwsBackend(stateKey string) string {
+	var sb strings.Builder
+	sb.WriteString("terraform {\n  backend \"s3\" {\n")
+	sb.WriteString(fmt.Sprintf("    bucket = \"%s\"\n", p.Config.AwsBucketName))
+	sb.WriteString(fmt.Sprintf("    region = \"%s\"\n", p.Config.AwsRegion))
+	sb.WriteString(fmt.Sprintf("    key    = \"%s\"\n", stateKey))
+	if p.Config.AwsAccessKey != "" {
+		// Static credentials — omitted when IRSA/pod identity is used
+		sb.WriteString(fmt.Sprintf("    access_key = \"%s\"\n", p.Config.AwsAccessKey))
+		sb.WriteString(fmt.Sprintf("    secret_key = \"%s\"\n", p.Config.AwsSecretKey))
+	}
+	if p.Config.AwsEndpoint != "" {
+		sb.WriteString(fmt.Sprintf("    endpoint                    = \"%s\"\n", p.Config.AwsEndpoint))
+		sb.WriteString("    skip_credentials_validation = true\n")
+		sb.WriteString("    skip_metadata_api_check     = true\n")
+		sb.WriteString("    skip_region_validation      = true\n")
+		sb.WriteString("    force_path_style            = true\n")
+	}
+	sb.WriteString("  }\n}\n")
+	return sb.String()
+}
+
+func (p *JobProcessor) generateAzureBackend(orgId, wsId string) string {
+	var sb strings.Builder
+	sb.WriteString("terraform {\n  backend \"azurerm\" {\n")
+	sb.WriteString(fmt.Sprintf("    storage_account_name = \"%s\"\n", p.Config.AzureStorageAccountName))
+	sb.WriteString(fmt.Sprintf("    container_name       = \"%s\"\n", p.Config.AzureStorageContainerName))
+	sb.WriteString(fmt.Sprintf("    key                  = \"%s/%s/terraform.tfstate\"\n", orgId, wsId))
+	if p.Config.AzureStorageAccountKey != "" {
+		sb.WriteString(fmt.Sprintf("    access_key = \"%s\"\n", p.Config.AzureStorageAccountKey))
+	}
+	sb.WriteString("  }\n}\n")
+	return sb.String()
+}
+
+func (p *JobProcessor) generateGcpBackend(orgId, wsId string) string {
+	var sb strings.Builder
+	sb.WriteString("terraform {\n  backend \"gcs\" {\n")
+	sb.WriteString(fmt.Sprintf("    bucket = \"%s\"\n", p.Config.GcpStorageBucketName))
+	sb.WriteString(fmt.Sprintf("    prefix = \"tfstate/%s/%s\"\n", orgId, wsId))
+	sb.WriteString("  }\n}\n")
+	return sb.String()
 }
 
 func readCommitHash(workingDir string) string {
@@ -188,14 +244,12 @@ func (p *JobProcessor) ProcessJob(job *model.TerraformJob) error {
 		}
 	}
 
-	// 4. Download Pre-existing State
-	// Try paths in order, skipping empty (0-byte) files which indicate no real state:
-	//   1. tfstate/{orgId}/{wsId}/terraform.tfstate  — primary path (Java API / TFC migration / Go executor v0.0.44+)
-	//   2. tfstate/{orgId}/{wsId}/state/state.raw.json — Go executor post-apply raw state
-	//   3. organization/{orgId}/workspace/{wsId}/state/terraform.tfstate — legacy Go executor path
-	p.downloadState(job, workingDir)
+	// 4. State is managed directly by the cloud storage backend (S3/Azure/GCS).
+	// generateBackendOverride (called inside executeTerraform) creates a backend override
+	// that points Terraform to the correct bucket+key, so terraform init/plan/apply
+	// read and write state without any manual download or upload step.
 
-	// 4b. Download Plan for Apply
+	// 4b. Download saved plan for apply step (plan file is NOT managed by the backend)
 	if job.Type == "terraformApply" {
 		p.downloadPlanForApply(job, workingDir)
 	}
