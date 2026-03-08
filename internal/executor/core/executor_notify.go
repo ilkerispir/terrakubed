@@ -22,10 +22,15 @@ type PlanSummary struct {
 
 // parsePlanSummary extracts add/change/destroy counts from terraform plan text output.
 // Looks for the summary line: "Plan: X to add, Y to change, Z to destroy."
+// Strips ANSI escape sequences first (terraform outputs colors when -no-color is not set).
 // Returns nil if the line is not found (e.g. no changes or parse error).
 func parsePlanSummary(output string) *PlanSummary {
+	// Strip ANSI color codes: ESC [ ... m
+	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	clean := ansiRe.ReplaceAllString(output, "")
+
 	re := regexp.MustCompile(`Plan:\s+(\d+) to add,\s*(\d+) to change,\s*(\d+) to destroy`)
-	m := re.FindStringSubmatch(output)
+	m := re.FindStringSubmatch(clean)
 	if len(m) != 4 {
 		return nil
 	}
