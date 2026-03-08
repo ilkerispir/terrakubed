@@ -6,10 +6,34 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ilkerispir/terrakubed/internal/model"
 )
+
+// PlanSummary holds the resource change counts from a terraform plan output.
+type PlanSummary struct {
+	Add     int
+	Change  int
+	Destroy int
+}
+
+// parsePlanSummary extracts add/change/destroy counts from terraform plan text output.
+// Looks for the summary line: "Plan: X to add, Y to change, Z to destroy."
+// Returns nil if the line is not found (e.g. no changes or parse error).
+func parsePlanSummary(output string) *PlanSummary {
+	re := regexp.MustCompile(`Plan:\s+(\d+) to add,\s*(\d+) to change,\s*(\d+) to destroy`)
+	m := re.FindStringSubmatch(output)
+	if len(m) != 4 {
+		return nil
+	}
+	add, _ := strconv.Atoi(m[1])
+	change, _ := strconv.Atoi(m[2])
+	destroy, _ := strconv.Atoi(m[3])
+	return &PlanSummary{Add: add, Change: change, Destroy: destroy}
+}
 
 // slackEnabled returns (webhookURL, true) if Slack notifications are active for this job.
 // Requires both ENABLE_SLACK_NOTIFICATIONS=true and SLACK_WEBHOOK_URL to be set.
@@ -24,8 +48,9 @@ func (p *JobProcessor) slackEnabled(job *model.TerraformJob) (string, bool) {
 	return url, true
 }
 
-// slackSend builds and POSTs a minimal Slack attachment message.
-func (p *JobProcessor) slackSend(webhookURL, color, title string, job *model.TerraformJob) {
+// slackSend builds and POSTs a Slack attachment message.
+// Pass a non-nil summary to include a Plan Summary block (plan notifications only).
+func (p *JobProcessor) slackSend(webhookURL, color, title string, job *model.TerraformJob, summary *PlanSummary) {
 	// UI URL priority:
 	// 1. TerrakubeUiURL / TERRAKUBE_UI_URL on the executor deployment (explicit)
 	// 2. Org-level TERRAKUBE_UI_URL env var (backward compat)
@@ -55,30 +80,47 @@ func (p *JobProcessor) slackSend(webhookURL, color, title string, job *model.Ter
 		wsText = fmt.Sprintf("<%s|%s>", runURL, wsName)
 	}
 
+	blocks := []map[string]interface{}{
+		{
+			"type": "section",
+			"text": map[string]string{"type": "mrkdwn", "text": title},
+		},
+		{
+			"type": "section",
+			"fields": []map[string]string{
+				{"type": "mrkdwn", "text": "*Workspace:*\n" + wsText},
+				{"type": "mrkdwn", "text": "*Repo:*\n" + job.Source},
+			},
+		},
+	}
+
+	// Append plan summary block when present
+	if summary != nil {
+		summaryText := fmt.Sprintf(
+			"*Plan Summary*\n:seedling: Created: *%d*     :hammer_and_wrench: Updated: *%d*     :x: Deleted: *%d*",
+			summary.Add, summary.Change, summary.Destroy,
+		)
+		blocks = append(blocks, map[string]interface{}{
+			"type": "section",
+			"text": map[string]string{"type": "mrkdwn", "text": summaryText},
+		})
+	}
+
+	blocks = append(blocks,
+		map[string]interface{}{"type": "divider"},
+		map[string]interface{}{
+			"type": "context",
+			"elements": []map[string]string{
+				{"type": "mrkdwn", "text": "Branch: `" + job.Branch + "` | Version: `" + job.TerraformVersion + "`"},
+			},
+		},
+	)
+
 	msg := map[string]interface{}{
 		"attachments": []map[string]interface{}{
 			{
-				"color": color,
-				"blocks": []map[string]interface{}{
-					{
-						"type": "section",
-						"text": map[string]string{"type": "mrkdwn", "text": title},
-					},
-					{
-						"type": "section",
-						"fields": []map[string]string{
-							{"type": "mrkdwn", "text": "*Workspace:*\n" + wsText},
-							{"type": "mrkdwn", "text": "*Repo:*\n" + job.Source},
-						},
-					},
-					{"type": "divider"},
-					{
-						"type": "context",
-						"elements": []map[string]string{
-							{"type": "mrkdwn", "text": "Branch: `" + job.Branch + "` | Version: `" + job.TerraformVersion + "`"},
-						},
-					},
-				},
+				"color":  color,
+				"blocks": blocks,
 			},
 		},
 	}
@@ -110,12 +152,12 @@ func (p *JobProcessor) notifySlackApproved(job *model.TerraformJob) {
 	if job.Type == "terraformDestroy" {
 		title = ":white_check_mark: *Approved — Destroying Resources*"
 	}
-	p.slackSend(url, "#1463fb", title, job)
+	p.slackSend(url, "#1463fb", title, job, nil)
 }
 
 // notifySlackPlanPending fires when a plan detects changes (exit code 2)
 // and the job moves to the approval-pending state.
-func (p *JobProcessor) notifySlackPlanPending(job *model.TerraformJob) {
+func (p *JobProcessor) notifySlackPlanPending(job *model.TerraformJob, summary *PlanSummary) {
 	url, ok := p.slackEnabled(job)
 	if !ok {
 		return
@@ -124,7 +166,7 @@ func (p *JobProcessor) notifySlackPlanPending(job *model.TerraformJob) {
 	if job.Type == "terraformPlanDestroy" {
 		title = ":hourglass_flowing_sand: *Destroy Plan Ready — Awaiting Approval*"
 	}
-	p.slackSend(url, "#eda509", title, job)
+	p.slackSend(url, "#eda509", title, job, summary)
 }
 
 // notifySlackPlanNoChanges fires when a plan detects no changes (exit code 0).
@@ -133,7 +175,7 @@ func (p *JobProcessor) notifySlackPlanNoChanges(job *model.TerraformJob) {
 	if !ok {
 		return
 	}
-	p.slackSend(url, "#1463fb", ":zzz: *No Changes Detected*", job)
+	p.slackSend(url, "#1463fb", ":zzz: *No Changes Detected*", job, nil)
 }
 
 // notifySlackSuccess fires when terraformApply or terraformDestroy completes successfully.
@@ -146,7 +188,7 @@ func (p *JobProcessor) notifySlackSuccess(job *model.TerraformJob) {
 	if job.Type == "terraformDestroy" {
 		title = ":white_check_mark: *Terraform Destroy Completed*"
 	}
-	p.slackSend(url, "#36a64f", title, job)
+	p.slackSend(url, "#36a64f", title, job, nil)
 }
 
 // notifySlackOnFailure fires when any terraform step fails.
@@ -168,5 +210,5 @@ func (p *JobProcessor) notifySlackOnFailure(job *model.TerraformJob) {
 	default:
 		title = ":x: *Terraform Plan Failed*"
 	}
-	p.slackSend(webhookURL, "#cc0000", title, job)
+	p.slackSend(webhookURL, "#cc0000", title, job, nil)
 }

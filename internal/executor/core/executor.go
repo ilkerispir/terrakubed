@@ -345,7 +345,7 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 		if err := p.Status.SetPending(job, output); err != nil {
 			log.Printf("Failed to set pending status: %v", err)
 		}
-		p.notifySlackPlanPending(job)
+		p.notifySlackPlanPending(job, parsePlanSummary(output))
 	} else {
 		if err := p.Status.SetCompleted(job, true, output); err != nil {
 			log.Printf("Failed to set completed status: %v", err)
