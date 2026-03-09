@@ -87,10 +87,9 @@ func (w *Workspace) setupFromTarGz() (string, error) {
 		return "", fmt.Errorf("failed to extract CLI config tar.gz: %w", err)
 	}
 
-	// If a sub-folder is specified, return that sub-path (same semantics as git clone path)
-	if w.Job.Folder != "" {
-		return filepath.Join(tempDir, w.Job.Folder), nil
-	}
+	// For CLI uploads the Folder field is meaningless: Terraform CLI uploads only the
+	// specific directory's contents (not the full repo), so the extracted root IS the
+	// working directory. Applying Folder here would point to a non-existent sub-path.
 	return tempDir, nil
 }
 

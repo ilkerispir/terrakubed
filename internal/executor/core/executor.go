@@ -305,11 +305,15 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 	job.EnvironmentVariables["PATH"] = execDir + ":" + currentPath
 
 	if err := p.generateBackendOverride(job, workingDir); err != nil {
-		return fmt.Errorf("failed to generate backend override: %w", err)
+		errMsg := fmt.Sprintf("failed to generate backend override: %v", err)
+		p.Status.SetCompleted(job, false, errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	if err := p.generateTerraformCredentials(job, workingDir); err != nil {
-		return fmt.Errorf("failed to generate terraform credentials: %w", err)
+		errMsg := fmt.Sprintf("failed to generate terraform credentials: %v", err)
+		p.Status.SetCompleted(job, false, errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	// Notify: approval was given, operation is starting (apply / destroy only)
