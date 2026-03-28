@@ -346,12 +346,18 @@ func (p *JobProcessor) executeTerraform(job *model.TerraformJob, workingDir stri
 		log.Printf("Warning: after scripts failed: %v", err)
 	}
 
+	isPlan := job.Type == "terraformPlan" || job.Type == "terraformPlanDestroy"
+
+	// For plan jobs, parse and store structured plan JSON for UI
+	if isPlan {
+		p.uploadPlanJSON(job, workingDir, execPath)
+	}
+
 	// Upload State and Output
 	p.uploadStateAndOutput(job, workingDir)
 
 	// Set final status and send matching Slack notification
 	output := logBuffer.String()
-	isPlan := job.Type == "terraformPlan" || job.Type == "terraformPlanDestroy"
 	if isPlan && result != nil && result.ExitCode == 2 {
 		// Plan has changes → pending approval
 		if err := p.Status.SetPending(job, output); err != nil {
