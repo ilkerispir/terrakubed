@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
+	tfjson "github.com/hashicorp/terraform-json"
 	"github.com/ilkerispir/terrakubed/internal/executor/logs"
 	"github.com/ilkerispir/terrakubed/internal/model"
 )
@@ -226,6 +227,18 @@ func (e *Executor) ShowState() (string, error) {
 	}
 
 	return string(bytes), nil
+}
+
+func (e *Executor) ShowPlanJSON() (*tfjson.Plan, error) {
+	tf, err := tfexec.NewTerraform(e.WorkingDir, e.ExecPath)
+	if err != nil {
+		return nil, fmt.Errorf("error running NewTerraform: %w", err)
+	}
+	env := e.buildEnvMap()
+	tf.SetEnv(env)
+	// No streaming — we need clean JSON output captured internally by tfexec
+	planFile := filepath.Join(e.WorkingDir, "terraform.tfplan")
+	return tf.ShowPlanFile(context.Background(), planFile)
 }
 
 func (e *Executor) StatePull() (string, error) {

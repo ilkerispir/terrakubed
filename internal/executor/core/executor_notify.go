@@ -15,9 +15,10 @@ import (
 
 // PlanSummary holds the resource change counts from a terraform plan output.
 type PlanSummary struct {
-	Add     int
-	Change  int
-	Destroy int
+	Add     int `json:"add"`
+	Change  int `json:"change"`
+	Destroy int `json:"destroy"`
+	Replace int `json:"replace"`
 }
 
 // parsePlanSummary extracts add/change/destroy counts from terraform plan text output.

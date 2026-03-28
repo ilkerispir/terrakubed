@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -8,9 +9,64 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	tfjson "github.com/hashicorp/terraform-json"
 	"github.com/ilkerispir/terrakubed/internal/executor/terraform"
 	"github.com/ilkerispir/terrakubed/internal/model"
 )
+
+// planContext is the JSON structure stored at tfplan/{jobId}/context.json.
+type planContext struct {
+	ResourceChanges []*tfjson.ResourceChange  `json:"resourceChanges"`
+	OutputChanges   map[string]*tfjson.Change `json:"outputChanges"`
+	Summary         PlanSummary               `json:"summary"`
+}
+
+func (p *JobProcessor) uploadPlanJSON(job *model.TerraformJob, workingDir string, execPath string) {
+	tfExecutor := terraform.NewExecutor(job, workingDir, nil, execPath)
+	plan, err := tfExecutor.ShowPlanJSON()
+	if err != nil {
+		log.Printf("Failed to parse plan JSON (skipping context upload): %v", err)
+		return
+	}
+
+	var summary PlanSummary
+	for _, rc := range plan.ResourceChanges {
+		if rc.Change == nil {
+			continue
+		}
+		actions := rc.Change.Actions
+		switch {
+		case actions.Create():
+			summary.Add++
+		case actions.Delete():
+			summary.Destroy++
+		case actions.Update():
+			summary.Change++
+		case actions.Replace():
+			summary.Replace++
+		}
+	}
+
+	ctx := planContext{
+		ResourceChanges: plan.ResourceChanges,
+		OutputChanges:   plan.OutputChanges,
+		Summary:         summary,
+	}
+
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		log.Printf("Failed to marshal plan context JSON: %v", err)
+		return
+	}
+
+	remotePath := fmt.Sprintf("tfplan/%s/context.json", job.JobId)
+	if err := p.Storage.UploadFile(remotePath, strings.NewReader(string(data))); err != nil {
+		log.Printf("Failed to upload plan context JSON: %v", err)
+		return
+	}
+	log.Printf("Uploaded plan context JSON to %s (add=%d change=%d destroy=%d replace=%d)",
+		remotePath, summary.Add, summary.Change, summary.Destroy, summary.Replace)
+}
 
 func (p *JobProcessor) uploadStateAndOutput(job *model.TerraformJob, workingDir string) {
 	// Upload Plan if exists (terraformPlan / terraformPlanDestroy).

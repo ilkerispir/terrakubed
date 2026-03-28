@@ -62,7 +62,6 @@ func NewServer(config Config) (*Server, error) {
 
 	// Create custom handlers
 	logsHandler := handler.NewLogsHandler(repo)
-	contextHandler := handler.NewContextHandler(repo)
 
 	// Create storage service
 	storageService, err := storage.NewStorageService(config.StorageType)
@@ -70,6 +69,8 @@ func NewServer(config Config) (*Server, error) {
 		log.Printf("Warning: storage service not available (%v), using nop", err)
 		storageService = &storage.NopStorageService{}
 	}
+
+	contextHandler := handler.NewContextHandler(repo, storageService)
 
 	// Create Redis client for live log streaming (optional — degraded gracefully)
 	var redisClient *redis.Client

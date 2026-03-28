@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ilkerispir/terrakubed/internal/api/repository"
 	"github.com/ilkerispir/terrakubed/internal/api/streaming"
+	"github.com/ilkerispir/terrakubed/internal/storage"
 )
 
 // LogsHandler handles the /logs endpoint for Redis log streaming.
@@ -119,12 +121,13 @@ func parseTfOutputPath(path string) (orgID, jobID, stepID string, ok bool) {
 
 // ContextHandler serves /context/v1 — provides execution context for jobs.
 type ContextHandler struct {
-	repo *repository.GenericRepository
+	repo    *repository.GenericRepository
+	storage storage.StorageService
 }
 
 // NewContextHandler creates a new ContextHandler.
-func NewContextHandler(repo *repository.GenericRepository) *ContextHandler {
-	return &ContextHandler{repo: repo}
+func NewContextHandler(repo *repository.GenericRepository, storage storage.StorageService) *ContextHandler {
+	return &ContextHandler{repo: repo, storage: storage}
 }
 
 // GetContext handles GET /context/v1/{jobId}
@@ -133,9 +136,33 @@ func (h *ContextHandler) GetContext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// TODO: Build execution context from DB (workspace vars, global vars, etc.)
-	log.Printf("Get context called: %s", r.URL.Path)
+
+	// Extract jobId from path: /context/v1/{jobId}
+	jobId := strings.TrimPrefix(r.URL.Path, "/context/v1/")
+	if jobId == "" || strings.Contains(jobId, "/") {
+		http.Error(w, "invalid path — expected /context/v1/{jobId}", http.StatusBadRequest)
+		return
+	}
+
+	remotePath := fmt.Sprintf("tfplan/%s/context.json", jobId)
+	reader, err := h.storage.DownloadFile(remotePath)
+	if err != nil {
+		log.Printf("Plan context not found for job %s: %v", jobId, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
+		return
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		log.Printf("Failed to read plan context for job %s: %v", jobId, err)
+		http.Error(w, "failed to read context", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("{}"))
+	w.Write(data)
 }
